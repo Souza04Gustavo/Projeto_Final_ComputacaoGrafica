@@ -13,7 +13,7 @@
 #include <stdbool.h> // Para bool, true, false
 
 #define MAX_SLIMES 20       // Número máximo de slimes que podem existir ao mesmo tempo
-#define SLIME_SPEED 150.0f  // Velocidade dos slimes
+int SLIME_SPEED = 150.0f;  // Velocidade dos slimes
 
 #define MAX_PROJECTILES 50
 #define PROJECTILE_SPEED 500.0f
@@ -21,7 +21,7 @@
 #define PROJECTILE_LIFETIME 2.0f // Segundos
 #define FIRE_RATE 0.25f // Segundos entre disparos (4 tiros por segundo)
 #define PROJECTILE_DAMAGE 25.0f // Cada tiro tira 25 de vida
-#define SLIME_MAX_HEALTH 100.0f // Slimes começam com 100 de vida
+int SLIME_MAX_HEALTH = 100.0f; // Slimes começam com 100 de vida
 #define PLAYER_MAX_HEALTH 100.0f
 #define SLIME_COLLISION_DAMAGE 25.0f // Dano que o slime causa ao colidir
 
@@ -31,9 +31,12 @@ const unsigned int SCR_HEIGHT = 600;
 const float PLAYER_SPEED = 250.0f; // Pixels por segundo (ajustei um pouco para cima)
 const float PLAYER_ROTATION_SPEED = 3.0f; // Radianos por segundo (ajuste conforme necessário)
 // const char *caminho_background = "shaders/chao/Ground_01.png"; // Caminho para a textura de fundo
-const char *caminho_background = "shaders/chao/tunnel_road.jpg"; // Caminho para a textura de fundo
+const char *caminho_background = "shaders/chao/fundo_ia1.png"; // Caminho para a textura de fundo
 const char *caminho_player = "shaders/player/handgun/idle/survivor-idle_handgun_1.png"; // Caminho para a textura do jogador
 const char *caminho_game_over = "shaders/interfaces/gameover.png"; // Caminho para a imagem
+
+const char *caminho_menu_title = "assets/menu_title.png";
+
 
 typedef struct {
     vec2 position;
@@ -65,9 +68,25 @@ typedef struct {
 
 
 typedef enum {
+    GAME_STATE_MENU,
     GAME_STATE_PLAYING,
     GAME_STATE_GAMEOVER
 } GameState;
+
+
+typedef enum {
+    DIFFICULTY_EASY,
+    DIFFICULTY_NORMAL,
+    DIFFICULTY_HARD
+} Difficulty;
+
+// Struct para representar um botão na tela
+typedef struct {
+    float x, y, width, height; // Posição (centro) e dimensões
+    unsigned int texture_normal;
+    unsigned int texture_hover;
+    bool is_hovered;
+} MenuButton;
 
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -87,19 +106,32 @@ void setupBackgroundGeometry(); // Adicionado protótipo
 void resetGame();
 void drawText(unsigned int shaderProgram, unsigned int vao, const char* text, float x, float y, float scale);
 void drawCharacter(unsigned int shaderProgram, unsigned int vao, char character, float x, float y, float scale);
+void mouse_pos_callback(GLFWwindow* window, double xpos, double ypos);
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
+void checkMenuButtonHovers();
 
 Player player;
 Slime slimes[MAX_SLIMES];
 Projectile projectiles[MAX_PROJECTILES];
-GameState currentGameState = GAME_STATE_PLAYING;
+GameState currentGameState = GAME_STATE_MENU;
+Difficulty selectedDifficulty = DIFFICULTY_NORMAL; // Dificuldade padrão
+MenuButton startButton;
+MenuButton difficultyButton_Easy, difficultyButton_Normal, difficultyButton_Hard;
+
 unsigned int playerTextureID; // ID da textura do jogador
 int activeProjectilesCount = 0; // Se você não for compactar o array, este não será usado assim
 int activeSlimesCount = 0; // Contador de slimes atualmente ativos
 float timeSinceLastShot = 0.0f;
 float timeSinceLastSpawn = 0.0f;
+float spawnInterval = 3.0f; // Intervalo de spawn de slimes em segundos
+
+double mouseX, mouseY;
+bool key_up_pressed_last_frame = false;
+bool key_down_pressed_last_frame = false;
 
 // Recursos do Fundo
 unsigned int backgroundTextureID;
+unsigned int menuBackgroundTextureID;
 unsigned int gameOverTextureID; // ID para a textura da tela de Game Over
 unsigned int backgroundVAO, backgroundVBO, backgroundEBO;
 unsigned int backgroundShaderProgram;
@@ -175,6 +207,10 @@ int main() {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetCursorPosCallback(window, mouse_pos_callback); 
+    // Callback para cliques
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
+
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) { fprintf(stderr, "Falha GLAD\n"); glfwTerminate(); return -1; }
 
@@ -234,23 +270,37 @@ int main() {
     gameOverTextureID = loadTexture(caminho_game_over);
     if (gameOverTextureID == 0) { fprintf(stderr, "Textura de Game Over não carregada!\n"); }
 
-    // Inicializações do Jogo
-    player.position[0] = SCR_WIDTH / 2.0f;
-    player.position[1] = SCR_HEIGHT / 2.0f;
-    player.size[0] = 50.0f;
-    player.size[1] = 50.0f;
-    player.angle = 0.0f;
-    player.maxHealth = PLAYER_MAX_HEALTH;
-    player.health = PLAYER_MAX_HEALTH;
-    initializeSlimes();
-    initializeProjectiles();
+    // --- Carregar Texturas do Menu ---
+    // CRIE ESTAS IMAGENS E COLOQUE OS CAMINHOS CORRETOS
+    menuBackgroundTextureID = loadTexture("shaders/interfaces/background_menu.png"); 
+    startButton.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
+    startButton.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
+    difficultyButton_Easy.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
+    difficultyButton_Easy.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
+    difficultyButton_Normal.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
+    difficultyButton_Normal.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
+    difficultyButton_Hard.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
+    difficultyButton_Hard.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
+
+    // --- Definir Posição e Tamanho dos Botões ---
+    startButton.width = 300.0f; startButton.height = 80.0f;
+    startButton.x = SCR_WIDTH / 2.0f; startButton.y = SCR_HEIGHT / 2.0f + 50.0f;
+    startButton.is_hovered = false;
+
+    // Todos os botões de dificuldade compartilham a mesma posição e tamanho
+    float diff_btn_width = 400.0f, diff_btn_height = 80.0f;
+    float diff_btn_x = SCR_WIDTH / 2.0f, diff_btn_y = SCR_HEIGHT / 2.0f - 50.0f;
+    difficultyButton_Easy.width = difficultyButton_Normal.width = difficultyButton_Hard.width = diff_btn_width;
+    difficultyButton_Easy.height = difficultyButton_Normal.height = difficultyButton_Hard.height = diff_btn_height;
+    difficultyButton_Easy.x = difficultyButton_Normal.x = difficultyButton_Hard.x = diff_btn_x;
+    difficultyButton_Easy.y = difficultyButton_Normal.y = difficultyButton_Hard.y = diff_btn_y;
+
 
     mat4 view_m, projection_m;
     glm_mat4_identity(view_m);
     glm_ortho(0.0f, (float)SCR_WIDTH, 0.0f, (float)SCR_HEIGHT, -1.0f, 1.0f, projection_m);
 
     float lastFrameTime = 0.0f, deltaTime;
-    float spawnInterval = 3.0f; // Intervalo de spawn de slimes em segundos
 
     // Localizações de Uniforms
     unsigned int go_modelLoc = glGetUniformLocation(gameObjectShaderProgram, "model");
@@ -289,9 +339,6 @@ int main() {
         updateSlimes(deltaTime, &player);
         updateProjectiles(deltaTime);
 
-        glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
         // --- 1. DESENHAR O FUNDO ---
         glUseProgram(backgroundShaderProgram);
         glUniformMatrix4fv(bg_viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
@@ -312,22 +359,21 @@ int main() {
         glBindVertexArray(gameObjectVAO);
 
         // --- Desenhar Jogador (com textura) ---
-        glUniform1i(go_useTextureLoc, true); // Dizer ao shader para usar textura
-        glActiveTexture(GL_TEXTURE0); // Pode reutilizar a unidade de textura
+        glUniform1i(go_useTextureLoc, true);
+        glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, playerTextureID);
         glUniform1i(go_objectTextureSamplerLoc, 0);
-
         mat4 model_player;
         glm_mat4_identity(model_player);
         glm_translate(model_player, (vec3){player.position[0], player.position[1], 0.0f});
         glm_rotate_z(model_player, player.angle, model_player);
-        float player_visual_scale_factor = 1.0f; // Ajuste o tamanho visual aqui
-        glm_scale(model_player, (vec3){player.size[0] * player_visual_scale_factor, player.size[1] * player_visual_scale_factor, 1.0f});
+        glm_scale(model_player, (vec3){player.size[0] * 1.0f, player.size[1] * 1.0f, 1.0f});
         glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_player);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-        // --- Desenhar Arma, Projéteis e Slimes (com cor sólida) ---
-        glUniform1i(go_useTextureLoc, false); // Dizer ao shader para usar cor sólida para o resto
+        // Alternar para modo cor sólida para os objetos restantes
+        glUniform1i(go_useTextureLoc, false);
+        
 
         // Desenhar Arma
         mat4 model_weapon;
@@ -437,6 +483,69 @@ int main() {
             glBindVertexArray(gameObjectVAO); // Reutilizamos o VAO dos objetos
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         }
+    else if (currentGameState == GAME_STATE_MENU) {
+            // --- LÓGICA DO MENU ---
+            checkMenuButtonHovers();
+
+            // --- RENDERIZAÇÃO DO MENU ---
+
+            // 1. Desenha o fundo do menu
+            glUseProgram(backgroundShaderProgram);
+            // CORREÇÃO: Enviar matrizes de visão e projeção para o shader do fundo
+            glUniformMatrix4fv(bg_viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
+            glUniformMatrix4fv(bg_projLoc, 1, GL_FALSE, (const GLfloat*)projection_m);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, menuBackgroundTextureID); // Use a textura de fundo do menu
+            glUniform1i(bg_textureSamplerLoc, 0);
+
+            mat4 model_bg;
+            glm_mat4_identity(model_bg);
+            glUniformMatrix4fv(bg_modelLoc, 1, GL_FALSE, (const GLfloat*)model_bg);
+
+            glBindVertexArray(backgroundVAO);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+            // 2. Desenha os botões interativos
+            glUseProgram(gameObjectShaderProgram);
+            // CORREÇÃO: Enviar matrizes de visão e projeção também para o shader dos objetos
+            glUniformMatrix4fv(go_viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
+            glUniformMatrix4fv(go_projLoc, 1, GL_FALSE, (const GLfloat*)projection_m);
+
+            glUniform1i(go_useTextureLoc, true);
+            glUniform1i(go_objectTextureSamplerLoc, 0);
+            glBindVertexArray(gameObjectVAO);
+            
+            mat4 model_button;
+
+            // Desenhar Botão Iniciar
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, startButton.is_hovered ? startButton.texture_hover : startButton.texture_normal);
+            glm_mat4_identity(model_button);
+            glm_translate(model_button, (vec3){startButton.x, startButton.y, 0.0f});
+            glm_scale(model_button, (vec3){startButton.width, startButton.height, 1.0f});
+            glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_button);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+            // Desenhar Botão Dificuldade
+            MenuButton* currentDifficultyButton;
+            if (selectedDifficulty == DIFFICULTY_EASY) {
+                currentDifficultyButton = &difficultyButton_Easy;
+            } else if (selectedDifficulty == DIFFICULTY_NORMAL) {
+                currentDifficultyButton = &difficultyButton_Normal;
+            } else { // DIFFICULTY_HARD
+                currentDifficultyButton = &difficultyButton_Hard;
+            }
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, currentDifficultyButton->is_hovered ? currentDifficultyButton->texture_hover : currentDifficultyButton->texture_normal);
+            glm_mat4_identity(model_button);
+            glm_translate(model_button, (vec3){currentDifficultyButton->x, currentDifficultyButton->y, 0.0f});
+            glm_scale(model_button, (vec3){currentDifficultyButton->width, currentDifficultyButton->height, 1.0f});
+            glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_button);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        }
+
 
     glfwSwapBuffers(window);
 
@@ -894,9 +1003,11 @@ unsigned int loadTexture(const char *path) {
 
     int width, height, nrComponents;
     // stbi_set_flip_vertically_on_load(true); // Descomente se a textura estiver de cabeça para baixo
+   
+    stbi_set_flip_vertically_on_load(true); 
+   
     unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 0);
    
-   stbi_set_flip_vertically_on_load(true); 
     if (data) {
         GLenum format = GL_RGB; // Padrão para RGB
         if (nrComponents == 1)
@@ -955,23 +1066,91 @@ void setupBackgroundGeometry() {
     glBindVertexArray(0);
 }
 
+
 void resetGame() {
-    printf("Reiniciando o jogo...\n");
+    printf("Iniciando/Reiniciando jogo com dificuldade: %d\n", selectedDifficulty);
+
+    // Aplicar configurações de dificuldade
+    if (selectedDifficulty == DIFFICULTY_EASY) {
+        SLIME_MAX_HEALTH= 80.0f;
+        SLIME_SPEED = 80.0f;
+        spawnInterval = 4.0f;
+    } else if (selectedDifficulty == DIFFICULTY_NORMAL) {
+        SLIME_MAX_HEALTH = 100.0f;
+        SLIME_SPEED = 100.0f;
+        spawnInterval = 3.0f;
+    } else if (selectedDifficulty == DIFFICULTY_HARD) {
+        SLIME_MAX_HEALTH = 150.0f;
+        SLIME_SPEED = 130.0f;
+        spawnInterval = 2.0f;
+    }
 
     // Resetar jogador
     player.position[0] = SCR_WIDTH / 2.0f;
     player.position[1] = SCR_HEIGHT / 2.0f;
     player.angle = 0.0f;
     player.health = PLAYER_MAX_HEALTH;
+    
+    // ===== CORREÇÃO AQUI =====
+    // Inicialize a vida máxima e o tamanho do jogador
+    player.maxHealth = PLAYER_MAX_HEALTH;
+    player.size[0] = 50.0f; // Defina um tamanho visual para o jogador. 50x50 pixels é um bom começo.
+    player.size[1] = 50.0f; // Ajuste conforme a sua imagem de sprite.
+    // =========================
 
     // Resetar slimes e projéteis
     initializeSlimes();
     initializeProjectiles();
 
     // Resetar contadores de tempo
-    timeSinceLastSpawn = 0.0f; // Esta é uma variável global, precisa ser resetada aqui
-    timeSinceLastShot = 0.0f;  // Também global
+    timeSinceLastSpawn = 0.0f;
+    timeSinceLastShot = 0.0f;
 
-    // Mudar o estado de volta para JOGANDO
+    // Mudar o estado para JOGANDO
     currentGameState = GAME_STATE_PLAYING;
+}
+
+// Callback para posição do mouse
+void mouse_pos_callback(GLFWwindow* window, double xpos, double ypos) {
+    mouseX = xpos;
+    mouseY = SCR_HEIGHT - ypos; // Inverte Y
+}
+
+// Callback para cliques do mouse
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    if (currentGameState != GAME_STATE_MENU) return;
+
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        if (startButton.is_hovered) {
+            printf("Botao Iniciar clicado!\n");
+            resetGame();
+        }
+        
+        // Vamos usar um único botão para ciclar a dificuldade
+        if (difficultyButton_Normal.is_hovered) { // Checa o hover em qualquer um dos botões de dificuldade
+            selectedDifficulty = (selectedDifficulty + 1) % 3; // Cicla EASY -> NORMAL -> HARD -> EASY
+            printf("Dificuldade mudada para: %d\n", selectedDifficulty);
+        }
+    }
+}
+
+// Função para verificar se o mouse está sobre os botões
+void checkMenuButtonHovers() {
+    // Botão Iniciar
+    float start_left = startButton.x - startButton.width / 2.0f;
+    float start_right = startButton.x + startButton.width / 2.0f;
+    float start_bottom = startButton.y - startButton.height / 2.0f;
+    float start_top = startButton.y + startButton.height / 2.0f;
+    startButton.is_hovered = (mouseX > start_left && mouseX < start_right && mouseY > start_bottom && mouseY < start_top);
+
+    // Botão Dificuldade (a área clicável é a mesma para todos os 3 estados)
+    float diff_left = difficultyButton_Normal.x - difficultyButton_Normal.width / 2.0f;
+    float diff_right = difficultyButton_Normal.x + difficultyButton_Normal.width / 2.0f;
+    float diff_bottom = difficultyButton_Normal.y - difficultyButton_Normal.height / 2.0f;
+    float diff_top = difficultyButton_Normal.y + difficultyButton_Normal.height / 2.0f;
+    
+    bool is_hovering_difficulty = (mouseX > diff_left && mouseX < diff_right && mouseY > diff_bottom && mouseY < diff_top);
+    difficultyButton_Easy.is_hovered = is_hovering_difficulty;
+    difficultyButton_Normal.is_hovered = is_hovering_difficulty;
+    difficultyButton_Hard.is_hovered = is_hovering_difficulty;
 }
