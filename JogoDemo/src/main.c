@@ -15,6 +15,11 @@
 #define MAX_SLIMES 20       // Número máximo de slimes que podem existir ao mesmo tempo
 int SLIME_SPEED = 150.0f;  // Velocidade dos slimes
 
+#define GIANT_SLIME_CHANCE 5 // Chance de 1 em 5 de um slime ser gigante
+#define GIANT_SLIME_SIZE_MULTIPLIER 1.8f // 80% maior que o normal
+#define GIANT_SLIME_HEALTH_MULTIPLIER 3.0f // 3x mais vida
+
+
 #define MAX_PROJECTILES 50
 #define PROJECTILE_SPEED 500.0f
 #define PROJECTILE_SIZE 10.0f
@@ -24,10 +29,32 @@ int SLIME_SPEED = 150.0f;  // Velocidade dos slimes
 int SLIME_MAX_HEALTH = 100.0f; // Slimes começam com 100 de vida
 #define PLAYER_MAX_HEALTH 100.0f
 #define SLIME_COLLISION_DAMAGE 25.0f // Dano que o slime causa ao colidir
+#define MAX_PARTICLES 500       // Máximo de partículas na tela ao mesmo tempo
+#define PARTICLE_LIFETIME 1.0f  // Segundos que uma partícula vive
+#define PARTICLE_SPEED 100.0f   // Velocidade base das partículas
+
+
+int g_CurrentPhase = 1;
+int g_KillsCount = 0;
+int g_KillsAtPhaseStart = 0; // <-- NOVA VARIÁVEL
+const int KILLS_FOR_PHASE_2 = 15;
+const int KILLS_FOR_PHASE_3 = 25; // Mortes TOTAIS, não 25 a mais
+const int KILLS_FOR_VICTORY = 40; // Mortes TOTAIS para vencer
+
+// Timers e estados para a tela de vitória
+bool g_ShowingVictoryScreen = false;
+float g_VictoryScreenTimer = 10.0f; // 10 segundos
 
 
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
+
+unsigned int g_CurrentScreenWidth = SCR_WIDTH;
+unsigned int g_CurrentScreenHeight = SCR_HEIGHT;
+mat4 g_ProjectionMatrix; // Vamos usar esta para a projeção da UI e do jogo
+
+float g_ScaleFactor = 1.0f; // Fator de escala para os objetos do jogo
+
 const float PLAYER_SPEED = 250.0f; // Pixels por segundo (ajustei um pouco para cima)
 const float PLAYER_ROTATION_SPEED = 3.0f; // Radianos por segundo (ajuste conforme necessário)
 // const char *caminho_background = "shaders/chao/Ground_01.png"; // Caminho para a textura de fundo
@@ -70,7 +97,8 @@ typedef struct {
 typedef enum {
     GAME_STATE_MENU,
     GAME_STATE_PLAYING,
-    GAME_STATE_GAMEOVER
+    GAME_STATE_GAMEOVER,
+    GAME_STATE_VICTORY
 } GameState;
 
 
@@ -87,6 +115,15 @@ typedef struct {
     unsigned int texture_hover;
     bool is_hovered;
 } MenuButton;
+
+
+typedef struct {
+    vec2 position;
+    vec2 velocity;
+    vec4 color;    // Usamos vec4 para incluir o Alpha (transparência)
+    float life;
+    bool active;
+} Particle;
 
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -109,6 +146,11 @@ void drawCharacter(unsigned int shaderProgram, unsigned int vao, char character,
 void mouse_pos_callback(GLFWwindow* window, double xpos, double ypos);
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 void checkMenuButtonHovers();
+void initializeParticles();
+void spawnParticleExplosion(vec2 position, vec3 baseColor, int count);
+void updateParticles(float deltaTime);
+void drawParticles(unsigned int shaderProgram, unsigned int vao);
+
 
 Player player;
 Slime slimes[MAX_SLIMES];
@@ -117,6 +159,7 @@ GameState currentGameState = GAME_STATE_MENU;
 Difficulty selectedDifficulty = DIFFICULTY_NORMAL; // Dificuldade padrão
 MenuButton startButton;
 MenuButton difficultyButton_Easy, difficultyButton_Normal, difficultyButton_Hard;
+Particle particles[MAX_PARTICLES];
 
 unsigned int playerTextureID; // ID da textura do jogador
 int activeProjectilesCount = 0; // Se você não for compactar o array, este não será usado assim
@@ -130,6 +173,12 @@ bool key_up_pressed_last_frame = false;
 bool key_down_pressed_last_frame = false;
 
 // Recursos do Fundo
+// IDs das texturas
+unsigned int backgroundTextureID_Phase1;
+unsigned int backgroundTextureID_Phase2;
+unsigned int backgroundTextureID_Phase3;
+unsigned int victoryTextureID;
+unsigned int slimeFaceTextureID;
 unsigned int backgroundTextureID;
 unsigned int menuBackgroundTextureID;
 unsigned int gameOverTextureID; // ID para a textura da tela de Game Over
@@ -150,20 +199,26 @@ const char *vertexShaderSource = "#version 330 core\n"
     "   TexCoord_Object = aTexCoord_Object;\n"
     "}\0";
 
+
 const char *fragmentShaderSource = "#version 330 core\n"
     "out vec4 FragColor;\n"
-    "in vec2 TexCoord_Object;\n"      // Receber coords de textura
-    "uniform vec3 objectColor_Solid;\n" // Renomeado para clareza
-    "uniform sampler2D objectTexture_Sampler;\n" // Sampler para a textura do objeto
-    "uniform bool useTexture;\n"         // Flag para decidir se usa textura ou cor sólida
+    "in vec2 TexCoord_Object;\n"
+    "uniform sampler2D objectTexture_Sampler;\n"
+    "uniform bool useTexture;\n"
+    
+    // ===== CORREÇÃO: MUDAR DE VEC3 PARA VEC4 =====
+    // Agora a cor sólida inclui o canal Alpha (transparência)
+    "uniform vec4 objectColor_Solid;\n"
+    
     "void main()\n"
     "{\n"
     "   if (useTexture) {\n"
     "       vec4 texColor = texture(objectTexture_Sampler, TexCoord_Object);\n"
-    "       if(texColor.a < 0.1) discard; // Descartar pixels transparentes (opcional, mas bom para sprites)\n"
+    "       if(texColor.a < 0.1) discard;\n"
     "       FragColor = texColor;\n"
     "   } else {\n"
-    "       FragColor = vec4(objectColor_Solid, 1.0f);\n"
+    // ===== CORREÇÃO: USAR DIRETAMENTE A COR VEC4 =====
+    "       FragColor = objectColor_Solid;\n"
     "   }\n"
     "}\0";
 
@@ -190,10 +245,16 @@ const char *backgroundFragmentShaderSource_global = "#version 330 core\n" // Ren
     "   FragColor = texture(backgroundTexture, TexCoord);\n"
     "}\0";
 
+
+
 int main() {
     srand(time(NULL));
 
-    if (!glfwInit()) { fprintf(stderr, "Falha GLFW\n"); return -1; }
+    // 1. INICIALIZAÇÃO DO GLFW
+    if (!glfwInit()) {
+        fprintf(stderr, "Falha ao inicializar GLFW\n");
+        return -1;
+    }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -201,121 +262,107 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
     #endif
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Jogo 2D", NULL, NULL);
-    if (window == NULL) { fprintf(stderr, "Falha Janela\n"); glfwTerminate(); return -1; }
+    // 2. OBTER INFORMAÇÕES DO MONITOR PARA TELA CHEIA
+    GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(primaryMonitor);
+    glfwWindowHint(GLFW_RED_BITS, mode->redBits);
+    glfwWindowHint(GLFW_GREEN_BITS, mode->greenBits);
+    glfwWindowHint(GLFW_BLUE_BITS, mode->blueBits);
+    glfwWindowHint(GLFW_REFRESH_RATE, mode->refreshRate);
 
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    // 3. CRIAR A JANELA
+    GLFWwindow* window = glfwCreateWindow(mode->width, mode->height, "Jogo 2D", primaryMonitor, NULL);
+    if (window == NULL) {
+        fprintf(stderr, "Falha ao criar a janela GLFW em tela cheia\n");
+        glfwTerminate();
+        return -1;
+    }
+
+    // 4. CONFIGURAR CONTEXTO E CARREGAR GLAD
     glfwMakeContextCurrent(window);
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        fprintf(stderr, "Falha ao inicializar GLAD\n");
+        glfwTerminate();
+        return -1;
+    }
+    
+    initializeParticles();
+
+    // 5. CONFIGURAR CALLBACKS E ESTADO INICIAL DO OPENGL
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-    glfwSetCursorPosCallback(window, mouse_pos_callback); 
-    // Callback para cliques
+    glfwSetCursorPosCallback(window, mouse_pos_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
-
-
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) { fprintf(stderr, "Falha GLAD\n"); glfwTerminate(); return -1; }
-
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    // --- Shader e VAO para os OBJETOS DO JOGO (suporta textura e cor sólida) ---
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); // Modo de blend padrão
+    
+    // 6. CRIAR SHADER E VAO ÚNICOS
     unsigned int gameObjectShaderProgram = create_shader_program(vertexShaderSource, fragmentShaderSource);
     if (gameObjectShaderProgram == 0) { glfwTerminate(); return -1; }
 
-    // VAO para todos os objetos (jogador, slimes, projéteis, arma)
     unsigned int gameObjectVAO;
     unsigned int gameObjectVBO, gameObjectEBO;
     float gameObjectVertices[] = {
-        // Posições         // Coords Textura
          0.5f,  0.5f, 0.0f,  1.0f, 1.0f,
          0.5f, -0.5f, 0.0f,  1.0f, 0.0f,
         -0.5f, -0.5f, 0.0f,  0.0f, 0.0f,
         -0.5f,  0.5f, 0.0f,  0.0f, 1.0f
     };
     unsigned int gameObjectIndices[] = { 0, 1, 3, 1, 2, 3 };
-
     glGenVertexArrays(1, &gameObjectVAO);
     glGenBuffers(1, &gameObjectVBO);
     glGenBuffers(1, &gameObjectEBO);
-
-    // CORREÇÃO CRÍTICA AQUI:
-    glBindVertexArray(gameObjectVAO); // Vincular o VAO
-
+    glBindVertexArray(gameObjectVAO);
     glBindBuffer(GL_ARRAY_BUFFER, gameObjectVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(gameObjectVertices), gameObjectVertices, GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, gameObjectEBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(gameObjectIndices), gameObjectIndices, GL_STATIC_DRAW);
-
-    // Atributo de Posição (layout=0), Stride é 5 (3 pos + 2 tex)
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-
-    // Atributo de Coordenada de Textura (layout=1), Stride é 5, Offset é 3
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
 
-    glBindVertexArray(0); // Desvincular APÓS configurar todos os atributos
-
-    // Carregar texturas
+    // 7. CARREGAR TODAS AS TEXTURAS (removido o glowTextureID)
     playerTextureID = loadTexture(caminho_player);
-    if (playerTextureID == 0) { fprintf(stderr, "Textura do jogador não carregada!\n"); }
-
-    // --- Shader, Textura e VAO para o FUNDO ---
-    backgroundShaderProgram = create_shader_program(backgroundVertexShaderSource_global, backgroundFragmentShaderSource_global);
-    if (backgroundShaderProgram == 0) { glfwTerminate(); return -1; }
-
     backgroundTextureID = loadTexture(caminho_background);
-    if (backgroundTextureID == 0) { fprintf(stderr, "Textura de fundo nao carregada, saindo.\n"); glfwTerminate(); return -1; }
-    setupBackgroundGeometry();
-
     gameOverTextureID = loadTexture(caminho_game_over);
-    if (gameOverTextureID == 0) { fprintf(stderr, "Textura de Game Over não carregada!\n"); }
-
-    // --- Carregar Texturas do Menu ---
-    // CRIE ESTAS IMAGENS E COLOQUE OS CAMINHOS CORRETOS
-    menuBackgroundTextureID = loadTexture("shaders/interfaces/background_menu.png"); 
+    menuBackgroundTextureID = loadTexture("shaders/interfaces/background_menu.png");
     startButton.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
     startButton.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
-    difficultyButton_Easy.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
-    difficultyButton_Easy.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
-    difficultyButton_Normal.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
-    difficultyButton_Normal.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
-    difficultyButton_Hard.texture_normal = loadTexture("shaders/interfaces/botao_final.png");
-    difficultyButton_Hard.texture_hover = loadTexture("shaders/interfaces/botao_final_apagado.png");
+    slimeFaceTextureID = loadTexture("shaders/slimes/slime_face.png");
+    difficultyButton_Easy.texture_normal = loadTexture("shaders/interfaces/facil.png");
+    difficultyButton_Easy.texture_hover = loadTexture("shaders/interfaces/facil_selecionado.png");
+    difficultyButton_Normal.texture_normal = loadTexture("shaders/interfaces/medio.png");
+    difficultyButton_Normal.texture_hover = loadTexture("shaders/interfaces/medio_selecionado.png");
+    difficultyButton_Hard.texture_normal = loadTexture("shaders/interfaces/dificil.png");
+    difficultyButton_Hard.texture_hover = loadTexture("shaders/interfaces/dificil_selecionado.png");
+    backgroundTextureID_Phase1 = loadTexture(caminho_background); // ou 
+    backgroundTextureID_Phase2 = loadTexture("shaders/chao/fundo_fase2.png"); // <-- NOVA
+    backgroundTextureID_Phase3 = loadTexture("shaders/chao/fundo_fase3.png"); // <-- NOVA
+    victoryTextureID = loadTexture("shaders/interfaces/tela_vitoria.png"); // <-- NOVA
 
-    // --- Definir Posição e Tamanho dos Botões ---
-    startButton.width = 300.0f; startButton.height = 80.0f;
-    startButton.x = SCR_WIDTH / 2.0f; startButton.y = SCR_HEIGHT / 2.0f + 50.0f;
-    startButton.is_hovered = false;
-
-    // Todos os botões de dificuldade compartilham a mesma posição e tamanho
-    float diff_btn_width = 400.0f, diff_btn_height = 80.0f;
-    float diff_btn_x = SCR_WIDTH / 2.0f, diff_btn_y = SCR_HEIGHT / 2.0f - 50.0f;
+    // 8. CONFIGURAR ESTADO INICIAL DO JOGO
+    startButton.width = 300.0f; startButton.height = 140.0f;
+    float diff_btn_width = 320.0f, diff_btn_height = 140.0f;
     difficultyButton_Easy.width = difficultyButton_Normal.width = difficultyButton_Hard.width = diff_btn_width;
     difficultyButton_Easy.height = difficultyButton_Normal.height = difficultyButton_Hard.height = diff_btn_height;
-    difficultyButton_Easy.x = difficultyButton_Normal.x = difficultyButton_Hard.x = diff_btn_x;
-    difficultyButton_Easy.y = difficultyButton_Normal.y = difficultyButton_Hard.y = diff_btn_y;
-
-
-    mat4 view_m, projection_m;
+    
+    mat4 view_m;
     glm_mat4_identity(view_m);
-    glm_ortho(0.0f, (float)SCR_WIDTH, 0.0f, (float)SCR_HEIGHT, -1.0f, 1.0f, projection_m);
+    framebuffer_size_callback(window, mode->width, mode->height);
 
     float lastFrameTime = 0.0f, deltaTime;
 
     // Localizações de Uniforms
-    unsigned int go_modelLoc = glGetUniformLocation(gameObjectShaderProgram, "model");
-    unsigned int go_viewLoc  = glGetUniformLocation(gameObjectShaderProgram, "view");
-    unsigned int go_projLoc  = glGetUniformLocation(gameObjectShaderProgram, "projection");
-    unsigned int go_colorSolidLoc = glGetUniformLocation(gameObjectShaderProgram, "objectColor_Solid"); // Nome correto do uniform
-    unsigned int go_useTextureLoc = glGetUniformLocation(gameObjectShaderProgram, "useTexture");
-    unsigned int go_objectTextureSamplerLoc = glGetUniformLocation(gameObjectShaderProgram, "objectTexture_Sampler");
+    unsigned int modelLoc = glGetUniformLocation(gameObjectShaderProgram, "model");
+    unsigned int viewLoc  = glGetUniformLocation(gameObjectShaderProgram, "view");
+    unsigned int projLoc  = glGetUniformLocation(gameObjectShaderProgram, "projection");
+    unsigned int colorSolidLoc = glGetUniformLocation(gameObjectShaderProgram, "objectColor_Solid");
+    unsigned int useTextureLoc = glGetUniformLocation(gameObjectShaderProgram, "useTexture");
+    unsigned int objectTextureSamplerLoc = glGetUniformLocation(gameObjectShaderProgram, "objectTexture_Sampler");
 
-    unsigned int bg_modelLoc = glGetUniformLocation(backgroundShaderProgram, "model");
-    unsigned int bg_viewLoc  = glGetUniformLocation(backgroundShaderProgram, "view");
-    unsigned int bg_projLoc  = glGetUniformLocation(backgroundShaderProgram, "projection");
-    unsigned int bg_textureSamplerLoc = glGetUniformLocation(backgroundShaderProgram, "backgroundTexture");
-
-    // Loop Principal
+    // ===== LOOP PRINCIPAL SIMPLIFICADO =====
     while (!glfwWindowShouldClose(window)) {
         float currentFrameTime = (float)glfwGetTime();
         deltaTime = currentFrameTime - lastFrameTime;
@@ -323,253 +370,263 @@ int main() {
 
         processInput(window, &player, deltaTime);
         glfwPollEvents();
-
-        // --- LIMPAR A TELA ---
+        
+        // Limpa a tela principal (framebuffer 0)
         glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-    if(currentGameState == GAME_STATE_PLAYING){
-
-        timeSinceLastSpawn += deltaTime; // Incrementar o contador de tempo
-        if (timeSinceLastSpawn >= spawnInterval) {
-            spawnSlime(); // Tenta spawnar um slime
-            timeSinceLastSpawn = 0.0f; // Reseta o contador
-        }
-
-        updateSlimes(deltaTime, &player);
-        updateProjectiles(deltaTime);
-
-        // --- 1. DESENHAR O FUNDO ---
-        glUseProgram(backgroundShaderProgram);
-        glUniformMatrix4fv(bg_viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
-        glUniformMatrix4fv(bg_projLoc, 1, GL_FALSE, (const GLfloat*)projection_m);
-        mat4 model_background;
-        glm_mat4_identity(model_background);
-        glUniformMatrix4fv(bg_modelLoc, 1, GL_FALSE, (const GLfloat*)model_background);
+        // Prepara o shader principal uma vez por frame
+        glUseProgram(gameObjectShaderProgram);
+        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
+        glUniformMatrix4fv(projLoc, 1, GL_FALSE, (const GLfloat*)g_ProjectionMatrix);
+        glBindVertexArray(gameObjectVAO);
         glActiveTexture(GL_TEXTURE0);
+        glUniform1i(objectTextureSamplerLoc, 0);
+
+        if(currentGameState == GAME_STATE_PLAYING){
+            // Lógica de atualização
+            timeSinceLastSpawn += deltaTime;
+            if (timeSinceLastSpawn >= spawnInterval) {
+                spawnSlime();
+                timeSinceLastSpawn = 0.0f;
+            }
+            updateSlimes(deltaTime, &player);
+            updateProjectiles(deltaTime);
+            updateParticles(deltaTime);
+
+            // RENDERIZAÇÃO DIRETA NA TELA
+            // Desenhar fundo
+            glUniform1i(useTextureLoc, true);
+             unsigned int currentBackgroundID;
+        if (g_CurrentPhase == 1) {
+            currentBackgroundID = backgroundTextureID_Phase1;
+        } else if (g_CurrentPhase == 2) {
+            currentBackgroundID = backgroundTextureID_Phase2;
+        } else { // Fase 3
+            currentBackgroundID = backgroundTextureID_Phase3;
+        }
+        glBindTexture(GL_TEXTURE_2D, currentBackgroundID);
+            mat4 model_background;
+            glm_mat4_identity(model_background);
+            glm_translate(model_background, (vec3){g_CurrentScreenWidth / 2.0f, g_CurrentScreenHeight / 2.0f, 0.0f});
+            glm_scale(model_background, (vec3){g_CurrentScreenWidth, g_CurrentScreenHeight, 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_background);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+            // Desenhar jogador
+            glBindTexture(GL_TEXTURE_2D, playerTextureID);
+            mat4 model_player;
+            glm_mat4_identity(model_player);
+            glm_translate(model_player, (vec3){player.position[0], player.position[1], 0.0f});
+            glm_rotate_z(model_player, player.angle, model_player);
+            glm_scale(model_player, (vec3){player.size[0], player.size[1], 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_player);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+            // Desenhar objetos com cor
+            glUniform1i(useTextureLoc, false);
+            drawProjectiles(gameObjectShaderProgram, gameObjectVAO, model_player);
+            drawSlimes(gameObjectShaderProgram, gameObjectVAO, model_player);
+            drawParticles(gameObjectShaderProgram, gameObjectVAO);
+
+            // Desenhar HUD
+            float hud_bar_width = 200.0f * g_ScaleFactor;
+            float hud_bar_height = 20.0f * g_ScaleFactor;
+            float hud_bar_padding = 10.0f * g_ScaleFactor;
+            float hud_bar_x = g_CurrentScreenWidth - hud_bar_width - hud_bar_padding;
+            float hud_bar_y = g_CurrentScreenHeight - hud_bar_height - hud_bar_padding;
+
+            glUniform4f(colorSolidLoc, 1.0f, 0.0f, 0.0f, 1.0f); // Vermelho opaco
+            mat4 model_hud_bg;
+            glm_mat4_identity(model_hud_bg);
+            glm_translate(model_hud_bg, (vec3){hud_bar_x + hud_bar_width / 2.0f, hud_bar_y + hud_bar_height / 2.0f, 0.0f});
+            glm_scale(model_hud_bg, (vec3){hud_bar_width, hud_bar_height, 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_hud_bg);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+            float health_percentage = player.health / player.maxHealth;
+            if (health_percentage < 0) health_percentage = 0;
+            float green_bar_width = hud_bar_width * health_percentage;
+            if (green_bar_width > 0) {
+                glUniform4f(colorSolidLoc, 0.0f, 1.0f, 0.0f, 1.0f); // Verde opaco
+                mat4 model_hud_fg;
+                glm_mat4_identity(model_hud_fg);
+                float green_bar_center_x = hud_bar_x + (green_bar_width / 2.0f);
+                glm_translate(model_hud_fg, (vec3){green_bar_center_x, hud_bar_y + hud_bar_height / 2.0f, 0.0f});
+                glm_scale(model_hud_fg, (vec3){green_bar_width, hud_bar_height, 1.0f});
+                glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_hud_fg);
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            }
+
+            // ===== DESENHAR HUD DE PROGRESSO DE FASE (CANTO SUPERIOR ESQUERDO) =====
+
+            // Posição da barra no canto superior esquerdo
+            float progress_hud_x = hud_bar_padding;
+            float progress_hud_y = g_CurrentScreenHeight - hud_bar_height - hud_bar_padding;
+
+            // 1. Desenhar fundo da barra (Azul Escuro)
+            glUniform4f(colorSolidLoc, 0.0f, 0.0f, 0.5f, 1.0f); // Cor azul escuro
+            mat4 model_progress_bg;
+            glm_mat4_identity(model_progress_bg);
+            // Calcula o centro da barra de fundo
+            glm_translate(model_progress_bg, (vec3){progress_hud_x + hud_bar_width / 2.0f, progress_hud_y + hud_bar_height / 2.0f, 0.0f});
+            glm_scale(model_progress_bg, (vec3){hud_bar_width, hud_bar_height, 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_progress_bg);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+            // 2. Calcular a porcentagem de preenchimento da barra
+            int kills_target_for_phase = 0;
+            if (g_CurrentPhase == 1) {
+                kills_target_for_phase = KILLS_FOR_PHASE_2;
+            } else if (g_CurrentPhase == 2) {
+                kills_target_for_phase = KILLS_FOR_PHASE_3;
+            } else { // Fase 3
+                kills_target_for_phase = KILLS_FOR_VICTORY;
+            }
+
+            int kills_needed_for_this_phase = kills_target_for_phase - g_KillsAtPhaseStart;
+            int kills_made_in_this_phase = g_KillsCount - g_KillsAtPhaseStart;
+
+            float progress_percentage = 0.0f;
+            if (kills_needed_for_this_phase > 0) {
+                progress_percentage = (float)kills_made_in_this_phase / (float)kills_needed_for_this_phase;
+            }
+            if (progress_percentage > 1.0f) progress_percentage = 1.0f; // Garante que não passe de 100%
+            if (progress_percentage < 0.0f) progress_percentage = 0.0f;
+
+            // 3. Desenhar barra de progresso (Azul Claro)
+            float blue_bar_width = hud_bar_width * progress_percentage;
+            if (blue_bar_width > 0) {
+                glUniform4f(colorSolidLoc, 0.2f, 0.5f, 1.0f, 1.0f); // Cor azul claro
+                mat4 model_progress_fg;
+                glm_mat4_identity(model_progress_fg);
+                // O centro da barra de progresso se move conforme ela cresce
+                float blue_bar_center_x = progress_hud_x + (blue_bar_width / 2.0f);
+                glm_translate(model_progress_fg, (vec3){blue_bar_center_x, progress_hud_y + hud_bar_height / 2.0f, 0.0f});
+                glm_scale(model_progress_fg, (vec3){blue_bar_width, hud_bar_height, 1.0f});
+                glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_progress_fg);
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            }
+
+
+        }
+        else if (currentGameState == GAME_STATE_GAMEOVER) {
+          glUniform1i(useTextureLoc, true);
         glBindTexture(GL_TEXTURE_2D, backgroundTextureID);
-        glUniform1i(bg_textureSamplerLoc, 0);
-        glBindVertexArray(backgroundVAO);
+        mat4 model_bg;
+        glm_mat4_identity(model_bg);
+        glm_translate(model_bg, (vec3){g_CurrentScreenWidth / 2.0f, g_CurrentScreenHeight / 2.0f, 0.0f});
+        glm_scale(model_bg, (vec3){g_CurrentScreenWidth, g_CurrentScreenHeight, 1.0f});
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_bg);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-        // --- 2. DESENHAR OBJETOS DO JOGO ---
-        glUseProgram(gameObjectShaderProgram);
-        glUniformMatrix4fv(go_viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
-        glUniformMatrix4fv(go_projLoc, 1, GL_FALSE, (const GLfloat*)projection_m);
-        glBindVertexArray(gameObjectVAO);
-
-        // --- Desenhar Jogador (com textura) ---
-        glUniform1i(go_useTextureLoc, true);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, playerTextureID);
-        glUniform1i(go_objectTextureSamplerLoc, 0);
-        mat4 model_player;
-        glm_mat4_identity(model_player);
-        glm_translate(model_player, (vec3){player.position[0], player.position[1], 0.0f});
-        glm_rotate_z(model_player, player.angle, model_player);
-        glm_scale(model_player, (vec3){player.size[0] * 1.0f, player.size[1] * 1.0f, 1.0f});
-        glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_player);
+        glBindTexture(GL_TEXTURE_2D, gameOverTextureID);
+        float gameOverImageWidth = 600.0f * g_ScaleFactor;
+        float gameOverImageHeight = 300.0f * g_ScaleFactor;
+        mat4 model_gameover;
+        glm_mat4_identity(model_gameover);
+        glm_translate(model_gameover, (vec3){g_CurrentScreenWidth / 2.0f, g_CurrentScreenHeight / 2.0f, 0.0f});
+        glm_scale(model_gameover, (vec3){gameOverImageWidth, gameOverImageHeight, 1.0f});
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_gameover);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-        // Alternar para modo cor sólida para os objetos restantes
-        glUniform1i(go_useTextureLoc, false);
-        
-
-        // Desenhar Arma
-        mat4 model_weapon;
-        vec3 weapon_color_vec = {0.5f, 0.5f, 0.5f};
-        glUniform3fv(go_colorSolidLoc, 1, weapon_color_vec);
-        glm_mat4_identity(model_weapon);
-        glm_translate(model_weapon, (vec3){player.position[0], player.position[1], 0.0f});
-        glm_rotate_z(model_weapon, player.angle, model_weapon);
-        float weapon_offset_distance = player.size[0] * 0.4f;
-        glm_translate(model_weapon, (vec3){weapon_offset_distance, 0.0f, 0.0f});
-        float weapon_width = player.size[0] * 0.6f;
-        float weapon_height = player.size[1] * 0.2f;
-        glm_scale(model_weapon, (vec3){weapon_width, weapon_height, 1.0f});
-        glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_weapon);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-        // Desenhar Projéteis
-        drawProjectiles(gameObjectShaderProgram, gameObjectVAO, model_player); // Passar os recursos corretos
-        // Desenhar Slimes
-        drawSlimes(gameObjectShaderProgram, gameObjectVAO, model_player); // Passar os recursos corretos
-
-        // --- 3. DESENHAR A INTERFACE DO USUÁRIO (HUD) ---
-        // A HUD deve ser desenhada por último para ficar na frente
-        // Usaremos o mesmo shader e VAO dos objetos, pois são apenas retângulos coloridos.
-        glUseProgram(gameObjectShaderProgram);
-        glBindVertexArray(gameObjectVAO);
-        
-        // Definições da Barra de Vida da HUD
-        float hud_bar_width = 200.0f;
-        float hud_bar_height = 20.0f;
-        float hud_bar_padding = 10.0f;
-        float hud_bar_x = SCR_WIDTH - hud_bar_width - hud_bar_padding;
-        float hud_bar_y = SCR_HEIGHT - hud_bar_height - hud_bar_padding;
-
-        // Desenhar fundo da barra de vida (vermelha)
-        vec3 hud_bar_bg_color = {1.0f, 0.0f, 0.0f};
-        glUniform1i(go_useTextureLoc, false); // Garantir que estamos usando cor sólida
-        glUniform3fv(go_colorSolidLoc, 1, hud_bar_bg_color);
-
-        mat4 model_hud_bg;
-        glm_mat4_identity(model_hud_bg);
-        // Nosso VAO é um quadrado unitário (-0.5 a 0.5), então seu centro é (0,0).
-        // Transladamos para o centro da barra que queremos desenhar.
-        glm_translate(model_hud_bg, (vec3){hud_bar_x + hud_bar_width / 2.0f, hud_bar_y + hud_bar_height / 2.0f, 0.0f});
-        glm_scale(model_hud_bg, (vec3){hud_bar_width, hud_bar_height, 1.0f});
-        glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_hud_bg);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-        // Desenhar frente da barra de vida (verde)
-        float health_percentage = player.health / player.maxHealth;
-        if (health_percentage < 0) health_percentage = 0;
-
-        float green_bar_width = hud_bar_width * health_percentage;
-
-        if (green_bar_width > 0) { // Só desenha se houver vida
-            vec3 hud_bar_fg_color = {0.0f, 1.0f, 0.0f};
-            glUniform3fv(go_colorSolidLoc, 1, hud_bar_fg_color);
-
-            mat4 model_hud_fg;
-            glm_mat4_identity(model_hud_fg);
-            // Transladar para o centro da parte verde da barra, alinhada à esquerda
-            float green_bar_center_x = hud_bar_x + (green_bar_width / 2.0f);
-            glm_translate(model_hud_fg, (vec3){green_bar_center_x, hud_bar_y + hud_bar_height / 2.0f, 0.0f});
-            glm_scale(model_hud_fg, (vec3){green_bar_width, hud_bar_height, 1.0f});
-            glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_hud_fg);
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         }
-
-    }
-    else if (currentGameState == GAME_STATE_GAMEOVER) {
-            // ==========================================================
-            // RENDERIZAÇÃO DA TELA DE GAME OVER (MUITO MAIS SIMPLES AGORA)
-            // ==========================================================
-
-            // 1. Redesenha o fundo do jogo para que ele apareça atrás da tela de Game Over.
-            glUseProgram(backgroundShaderProgram);
-            glBindTexture(GL_TEXTURE_2D, backgroundTextureID);
-            glBindVertexArray(backgroundVAO);
-            mat4 model_bg;
-            glm_mat4_identity(model_bg);
-            glUniformMatrix4fv(bg_modelLoc, 1, GL_FALSE, (const GLfloat*)model_bg);
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-            // 2. Desenha a imagem de Game Over no centro da tela.
-            glUseProgram(gameObjectShaderProgram); // Usamos o shader de objetos que suporta textura
-            
-            // Configura para usar textura
-            glUniform1i(go_useTextureLoc, true);
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, gameOverTextureID);
-            glUniform1i(go_objectTextureSamplerLoc, 0);
-
-            // Define o tamanho da imagem de Game Over na tela
-            float gameOverImageWidth = 600.0f;  // Ajuste para a largura da sua imagem
-            float gameOverImageHeight = 300.0f; // Ajuste para a altura da sua imagem
-
-            mat4 model_gameover;
-            glm_mat4_identity(model_gameover);
-            
-            // Translada para o centro da tela
-            glm_translate(model_gameover, (vec3){SCR_WIDTH / 2.0f, SCR_HEIGHT / 2.0f, 0.0f});
-            // Escala o nosso quadrado unitário para o tamanho da imagem
-            glm_scale(model_gameover, (vec3){gameOverImageWidth, gameOverImageHeight, 1.0f});
-
-            glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_gameover);
-            
-            glBindVertexArray(gameObjectVAO); // Reutilizamos o VAO dos objetos
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-        }
-    else if (currentGameState == GAME_STATE_MENU) {
-            // --- LÓGICA DO MENU ---
+        else if (currentGameState == GAME_STATE_MENU) {
             checkMenuButtonHovers();
-
-            // --- RENDERIZAÇÃO DO MENU ---
-
-            // 1. Desenha o fundo do menu
-            glUseProgram(backgroundShaderProgram);
-            // CORREÇÃO: Enviar matrizes de visão e projeção para o shader do fundo
-            glUniformMatrix4fv(bg_viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
-            glUniformMatrix4fv(bg_projLoc, 1, GL_FALSE, (const GLfloat*)projection_m);
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, menuBackgroundTextureID); // Use a textura de fundo do menu
-            glUniform1i(bg_textureSamplerLoc, 0);
-
-            mat4 model_bg;
-            glm_mat4_identity(model_bg);
-            glUniformMatrix4fv(bg_modelLoc, 1, GL_FALSE, (const GLfloat*)model_bg);
-
-            glBindVertexArray(backgroundVAO);
+            glUniform1i(useTextureLoc, true);
+            
+            glBindTexture(GL_TEXTURE_2D, menuBackgroundTextureID);
+            mat4 model_menu_bg;
+            glm_mat4_identity(model_menu_bg);
+            glm_translate(model_menu_bg, (vec3){g_CurrentScreenWidth / 2.0f, g_CurrentScreenHeight / 2.0f, 0.0f});
+            glm_scale(model_menu_bg, (vec3){g_CurrentScreenWidth, g_CurrentScreenHeight, 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_menu_bg);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-            // 2. Desenha os botões interativos
-            glUseProgram(gameObjectShaderProgram);
-            // CORREÇÃO: Enviar matrizes de visão e projeção também para o shader dos objetos
-            glUniformMatrix4fv(go_viewLoc, 1, GL_FALSE, (const GLfloat*)view_m);
-            glUniformMatrix4fv(go_projLoc, 1, GL_FALSE, (const GLfloat*)projection_m);
-
-            glUniform1i(go_useTextureLoc, true);
-            glUniform1i(go_objectTextureSamplerLoc, 0);
-            glBindVertexArray(gameObjectVAO);
             
             mat4 model_button;
-
-            // Desenhar Botão Iniciar
-            glActiveTexture(GL_TEXTURE0);
+            float btn_width_scaled = startButton.width * g_ScaleFactor;
+            float btn_height_scaled = startButton.height * g_ScaleFactor;
+            
             glBindTexture(GL_TEXTURE_2D, startButton.is_hovered ? startButton.texture_hover : startButton.texture_normal);
             glm_mat4_identity(model_button);
             glm_translate(model_button, (vec3){startButton.x, startButton.y, 0.0f});
-            glm_scale(model_button, (vec3){startButton.width, startButton.height, 1.0f});
-            glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_button);
+            glm_scale(model_button, (vec3){btn_width_scaled, btn_height_scaled, 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_button);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-            // Desenhar Botão Dificuldade
-            MenuButton* currentDifficultyButton;
-            if (selectedDifficulty == DIFFICULTY_EASY) {
-                currentDifficultyButton = &difficultyButton_Easy;
-            } else if (selectedDifficulty == DIFFICULTY_NORMAL) {
-                currentDifficultyButton = &difficultyButton_Normal;
-            } else { // DIFFICULTY_HARD
-                currentDifficultyButton = &difficultyButton_Hard;
-            }
-
-            glActiveTexture(GL_TEXTURE0);
+            float diff_btn_width_scaled = difficultyButton_Normal.width * g_ScaleFactor;
+            float diff_btn_height_scaled = difficultyButton_Normal.height * g_ScaleFactor;
+            MenuButton* currentDifficultyButton = (selectedDifficulty == DIFFICULTY_EASY) ? &difficultyButton_Easy : (selectedDifficulty == DIFFICULTY_NORMAL) ? &difficultyButton_Normal : &difficultyButton_Hard;
             glBindTexture(GL_TEXTURE_2D, currentDifficultyButton->is_hovered ? currentDifficultyButton->texture_hover : currentDifficultyButton->texture_normal);
             glm_mat4_identity(model_button);
             glm_translate(model_button, (vec3){currentDifficultyButton->x, currentDifficultyButton->y, 0.0f});
-            glm_scale(model_button, (vec3){currentDifficultyButton->width, currentDifficultyButton->height, 1.0f});
-            glUniformMatrix4fv(go_modelLoc, 1, GL_FALSE, (const GLfloat*)model_button);
+            glm_scale(model_button, (vec3){diff_btn_width_scaled, diff_btn_height_scaled, 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_button);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         }
+        else if (currentGameState == GAME_STATE_VICTORY) {
+        // --- ATUALIZAR O TIMER DA TELA DE VITÓRIA ---
+        g_VictoryScreenTimer -= deltaTime;
+        if (g_VictoryScreenTimer <= 0) {
+            currentGameState = GAME_STATE_MENU; // Volta para o menu
+        }
 
+        // --- DESENHAR A TELA DE VITÓRIA ---
+        glUniform1i(useTextureLoc, true);
+        glBindTexture(GL_TEXTURE_2D, victoryTextureID);
 
-    glfwSwapBuffers(window);
-
+        // Centraliza a imagem na tela
+        mat4 model_victory;
+        glm_mat4_identity(model_victory);
+        glm_translate(model_victory, (vec3){g_CurrentScreenWidth / 2.0f, g_CurrentScreenHeight / 2.0f, 0.0f});
+        // Escala para o tamanho da tela inteira ou um tamanho fixo
+        glm_scale(model_victory, (vec3){g_CurrentScreenWidth, g_CurrentScreenHeight, 1.0f});
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_victory);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
-    // Cleanup
+    
+
+        glfwSwapBuffers(window);
+    }
+
+    // ===== LIMPEZA FINAL SIMPLIFICADA =====
     glDeleteVertexArrays(1, &gameObjectVAO);
     glDeleteBuffers(1, &gameObjectVBO);
     glDeleteBuffers(1, &gameObjectEBO);
     glDeleteProgram(gameObjectShaderProgram);
 
-    glDeleteVertexArrays(1, &backgroundVAO);
-    glDeleteBuffers(1, &backgroundVBO);
-    glDeleteBuffers(1, &backgroundEBO);
-    glDeleteProgram(backgroundShaderProgram);
+    // Deleta apenas as texturas que foram carregadas
+    glDeleteTextures(1, &playerTextureID);
     glDeleteTextures(1, &backgroundTextureID);
-    if(playerTextureID > 0) glDeleteTextures(1, &playerTextureID);
+    glDeleteTextures(1, &gameOverTextureID);
+    glDeleteTextures(1, &menuBackgroundTextureID);
+    glDeleteTextures(1, &startButton.texture_normal);
+    glDeleteTextures(1, &startButton.texture_hover);
 
     glfwTerminate();
     return 0;
 }
 
-
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+    if (width == 0 || height == 0) return;
+
+    g_CurrentScreenWidth = width;
+    g_CurrentScreenHeight = height;
+
     glViewport(0, 0, width, height);
+    glm_ortho(0.0f, (float)g_CurrentScreenWidth, 0.0f, (float)g_CurrentScreenHeight, -1.0f, 1.0f, g_ProjectionMatrix);
+    
+    // ===== CORREÇÃO: CALCULAR O FATOR DE ESCALA GLOBAL =====
+    // Usamos a altura como base para manter a proporção correta dos sprites.
+    g_ScaleFactor = (float)height / (float)SCR_HEIGHT;
+
+    
+    // Recalcular posições dos botões do menu (seu código para isso já está correto)
+    startButton.x = (float)g_CurrentScreenWidth / 2.0f;
+    startButton.y = (float)g_CurrentScreenHeight / 2.0f + 50.0f; // Manter offset em pixels
+    float diff_btn_x = (float)g_CurrentScreenWidth / 2.0f;
+    float diff_btn_y = (float)g_CurrentScreenHeight / 2.0f - 200.0f;
+    difficultyButton_Easy.x = difficultyButton_Normal.x = difficultyButton_Hard.x = diff_btn_x;
+    difficultyButton_Easy.y = difficultyButton_Normal.y = difficultyButton_Hard.y = diff_btn_y;
 }
 
 void initializeSlimes() {
@@ -579,169 +636,193 @@ void initializeSlimes() {
     activeSlimesCount = 0;
 }
 
+
 void spawnSlime() {
-    int newSlimeIndex = -1;
-    if (activeSlimesCount < MAX_SLIMES) {
-        newSlimeIndex = activeSlimesCount;
-    } else {
-        for (int i = 0; i < MAX_SLIMES; ++i) {
-            if (!slimes[i].ativo) {
-                newSlimeIndex = i;
-                break;
-            }
-        }
+    if (activeSlimesCount >= MAX_SLIMES) {
+        return;
     }
 
-    if (newSlimeIndex == -1) { return; }
-
-    Slime* newSlime = &slimes[newSlimeIndex];
+    Slime* newSlime = &slimes[activeSlimesCount];
     
-    // ... (lógica de posição e cor como antes) ...
+    // Decide aleatoriamente se o slime será gigante
+    bool isGiant = (rand() % GIANT_SLIME_CHANCE == 0);
+
+    if (isGiant) {
+        // Propriedades do Slime Gigante
+        newSlime->raio = (20.0f * g_ScaleFactor) * GIANT_SLIME_SIZE_MULTIPLIER;
+        newSlime->maxHealth = SLIME_MAX_HEALTH * GIANT_SLIME_HEALTH_MULTIPLIER;
+        newSlime->health = newSlime->maxHealth;
+    } else {
+        // Propriedades do Slime Normal
+        newSlime->raio = 20.0f * g_ScaleFactor;
+        newSlime->maxHealth = SLIME_MAX_HEALTH;
+        newSlime->health = SLIME_MAX_HEALTH;
+    }
+
+    // Lógica de spawn fora da tela (comum para ambos os tipos)
     int side = rand() % 4;
     float spawnX, spawnY;
-    float slimeRadius = 20.0f;
-
     switch (side) {
-        case 0: spawnX = (float)(rand() % SCR_WIDTH); spawnY = (float)SCR_HEIGHT + slimeRadius; break;
-        case 1: spawnX = (float)(rand() % SCR_WIDTH); spawnY = 0.0f - slimeRadius; break;
-        case 2: spawnX = 0.0f - slimeRadius; spawnY = (float)(rand() % SCR_HEIGHT); break;
-        case 3: default: spawnX = (float)SCR_WIDTH + slimeRadius; spawnY = (float)(rand() % SCR_HEIGHT); break;
+        case 0: spawnX = (float)(rand() % g_CurrentScreenWidth); spawnY = (float)g_CurrentScreenHeight + newSlime->raio; break;
+        case 1: spawnX = (float)(rand() % g_CurrentScreenWidth); spawnY = 0.0f - newSlime->raio; break;
+        case 2: spawnX = 0.0f - newSlime->raio; spawnY = (float)(rand() % g_CurrentScreenHeight); break;
+        default: spawnX = (float)g_CurrentScreenWidth + newSlime->raio; spawnY = (float)(rand() % g_CurrentScreenHeight); break;
     }
+    
     newSlime->x = spawnX;
     newSlime->y = spawnY;
     newSlime->z = 0.0f;
-    newSlime->raio = slimeRadius;
     newSlime->cor[0] = (float)(rand() % 101) / 100.0f;
     newSlime->cor[1] = (float)(rand() % 101) / 100.0f;
     newSlime->cor[2] = (float)(rand() % 101) / 100.0f;
-    if (newSlime->cor[0] < 0.2f && newSlime->cor[1] < 0.2f && newSlime->cor[2] < 0.2f) {
-        newSlime->cor[rand() % 3] = 0.5f;
-    }
-
-    // INICIALIZAR VIDA
-    newSlime->maxHealth = SLIME_MAX_HEALTH;
-    newSlime->health = SLIME_MAX_HEALTH;
     newSlime->ativo = true;
 
-    if (newSlimeIndex == activeSlimesCount) {
-        activeSlimesCount++;
-    }
+    activeSlimesCount++;
 }
 
-void drawSlimes(unsigned int currentShaderProgram, unsigned int currentVAO, mat4 model_m_placeholder) {
-    mat4 model_matrix; // Matriz de modelo local para cada objeto
+void drawSlimes(unsigned int currentShaderProgram, unsigned int currentVAO, mat4 model_m_ref) {
+    mat4 model_matrix;
     unsigned int modelLoc = glGetUniformLocation(currentShaderProgram, "model");
     unsigned int colorLoc = glGetUniformLocation(currentShaderProgram, "objectColor_Solid");
+    unsigned int useTextureLoc = glGetUniformLocation(currentShaderProgram, "useTexture");
 
-    vec3 health_bar_bg_color = {1.0f, 0.0f, 0.0f}; // Vermelho para fundo da barra
-    vec3 health_bar_fg_color = {0.0f, 1.0f, 0.0f}; // Verde para vida atual
+    vec4 health_bar_bg_color = {1.0f, 0.0f, 0.0f, 1.0f};
+    vec4 health_bar_fg_color = {0.0f, 1.0f, 0.0f, 1.0f};
 
     glBindVertexArray(currentVAO);
 
     for (int i = 0; i < activeSlimesCount; ++i) {
-        if (slimes[i].ativo) {
-            Slime* currentSlime = &slimes[i];
+        Slime* currentSlime = &slimes[i];
+        
+        // ===== PASSO 1: DESENHAR O CORPO COLORIDO DO SLIME =====
+        glUniform1i(useTextureLoc, false); // Usaremos cor sólida para o corpo
+        vec4 slimeSolidColor = { currentSlime->cor[0], currentSlime->cor[1], currentSlime->cor[2], 1.0f };
+        glUniform4fv(colorLoc, 1, (const GLfloat*)slimeSolidColor);
 
-            // 1. Desenhar o corpo do Slime (como antes)
-            glUniform3fv(colorLoc, 1, currentSlime->cor);
-            glm_mat4_identity(model_matrix);
-            glm_translate(model_matrix, (vec3){currentSlime->x, currentSlime->y, currentSlime->z});
-            glm_scale(model_matrix, (vec3){currentSlime->raio * 2.0f, currentSlime->raio * 2.0f, 1.0f});
-            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_matrix);
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        // Prepara a matriz de transformação (posição e tamanho)
+        glm_mat4_identity(model_matrix);
+        glm_translate(model_matrix, (vec3){currentSlime->x, currentSlime->y, currentSlime->z});
+        glm_scale(model_matrix, (vec3){currentSlime->raio * 2.0f, currentSlime->raio * 2.0f, 1.0f});
+        
+        // Envia a matriz para o shader e desenha o corpo
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_matrix);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        
+        // ===== PASSO 2: DESENHAR O ROSTO TEXTURIZADO POR CIMA =====
+        glUniform1i(useTextureLoc, true); // Agora, usaremos uma textura
+        glBindTexture(GL_TEXTURE_2D, slimeFaceTextureID);
 
-            // --- Desenhar a Barra de Vida ---
-            
-            // Definições da Barra de Vida
-            float bar_width = currentSlime->raio * 2.0f; // Mesma largura do slime
-            float bar_height = 5.0f; // Altura fixa
-            float bar_y_offset = currentSlime->raio + 5.0f; // Posição acima do slime
+        // A posição e o tamanho são os mesmos do corpo, então reutilizamos a `model_matrix`
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_matrix);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-            // 2. Desenhar o fundo da barra de vida (vermelha, inteira)
-            glUniform3fv(colorLoc, 1, health_bar_bg_color);
-            glm_mat4_identity(model_matrix);
-            glm_translate(model_matrix, (vec3){currentSlime->x, currentSlime->y + bar_y_offset, 0.0f});
-            glm_scale(model_matrix, (vec3){bar_width, bar_height, 1.0f});
-            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_matrix);
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        // ===== PASSO 3: DESENHAR A BARRA DE VIDA (como antes) =====
+        glUniform1i(useTextureLoc, false); // Voltamos para cor sólida
+        
+        float bar_width = currentSlime->raio * 2.0f;
+        float bar_height = 5.0f * g_ScaleFactor;
+        float bar_y_offset = currentSlime->raio + (5.0f * g_ScaleFactor);
 
-            // 3. Desenhar a frente da barra de vida (verde, proporcional à vida)
-            float health_percentage = currentSlime->health / currentSlime->maxHealth;
-            if (health_percentage < 0) health_percentage = 0; // Evitar escala negativa
-            
-            glUniform3fv(colorLoc, 1, health_bar_fg_color);
-            glm_mat4_identity(model_matrix);
-            // A translação precisa ser ajustada para que a barra verde diminua para a direita,
-            // mantendo-se alinhada à esquerda da barra de fundo.
-            // Movemos para a posição inicial (borda esquerda) e escalamos a partir dali.
-            // Nosso VBO de quadrado unitário é centrado em (0,0).
-            // Primeiro, transladamos para o centro da barra VERDE.
-            float green_bar_width = bar_width * health_percentage;
+        // Barra de fundo (vermelha)
+        glUniform4fv(colorLoc, 1, (const GLfloat*)health_bar_bg_color);
+        mat4 model_health_bar_bg;
+        glm_mat4_identity(model_health_bar_bg);
+        glm_translate(model_health_bar_bg, (vec3){currentSlime->x, currentSlime->y + bar_y_offset, 0.0f});
+        glm_scale(model_health_bar_bg, (vec3){bar_width, bar_height, 1.0f});
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_health_bar_bg);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        
+        // Barra de vida (verde)
+        float health_percentage = currentSlime->health / currentSlime->maxHealth;
+        if (health_percentage < 0) health_percentage = 0;
+        float green_bar_width = bar_width * health_percentage;
+        if (green_bar_width > 0) {
+            glUniform4fv(colorLoc, 1, (const GLfloat*)health_bar_fg_color);
+            mat4 model_health_bar_fg;
+            glm_mat4_identity(model_health_bar_fg);
             float green_bar_center_x = currentSlime->x - (bar_width / 2.0f) + (green_bar_width / 2.0f);
-            
-            glm_translate(model_matrix, (vec3){green_bar_center_x, currentSlime->y + bar_y_offset, 0.0f});
-            glm_scale(model_matrix, (vec3){green_bar_width, bar_height, 1.0f});
-            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_matrix);
+            glm_translate(model_health_bar_fg, (vec3){green_bar_center_x, currentSlime->y + bar_y_offset, 0.0f});
+            glm_scale(model_health_bar_fg, (vec3){green_bar_width, bar_height, 1.0f});
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_health_bar_fg);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         }
     }
 }
 
 void updateSlimes(float deltaTime, Player* p) {
+    // Itera pelo array de slimes ativos
     for (int i = 0; i < activeSlimesCount; ) {
-        bool slime_was_deactivated = false;
-        if (slimes[i].ativo) {
-            Slime* currentSlime = &slimes[i];
-            
-            // ... (lógica de movimento do slime como antes) ...
-            float dirX = p->position[0] - currentSlime->x;
-            float dirY = p->position[1] - currentSlime->y;
-            float length = sqrtf(dirX * dirX + dirY * dirY);
-            if (length > 0) {
-                dirX /= length;
-                dirY /= length;
-            }
-            currentSlime->x += dirX * SLIME_SPEED * deltaTime;
-            currentSlime->y += dirY * SLIME_SPEED * deltaTime;
+        Slime* currentSlime = &slimes[i];
+        bool slime_removed = false;
 
-            // --- Detecção de Colisão (Slime com Jogador) ---
-            float playerLeft   = p->position[0] - p->size[0] / 2.0f;
-            float playerRight  = p->position[0] + p->size[0] / 2.0f;
-            float playerBottom = p->position[1] - p->size[1] / 2.0f;
-            float playerTop    = p->position[1] + p->size[1] / 2.0f;
+        // 1. Atualizar posição do slime
+        float dirX = p->position[0] - currentSlime->x;
+        float dirY = p->position[1] - currentSlime->y;
+        float length = sqrtf(dirX * dirX + dirY * dirY);
+        if (length > 0) {
+            dirX /= length;
+            dirY /= length;
+        }
+        currentSlime->x += dirX * SLIME_SPEED * deltaTime;
+        currentSlime->y += dirY * SLIME_SPEED * deltaTime;
 
-            float slimeLeft   = currentSlime->x - currentSlime->raio;
-            float slimeRight  = currentSlime->x + currentSlime->raio;
-            float slimeBottom = currentSlime->y - currentSlime->raio;
-            float slimeTop    = currentSlime->y + currentSlime->raio;
-
-            if (playerLeft < slimeRight && playerRight > slimeLeft &&
-                playerBottom < slimeTop && playerTop > slimeBottom) {
-                
-                // APLICAR DANO AO JOGADOR
-                p->health -= SLIME_COLLISION_DAMAGE;
-                printf("JOGADOR SOFREU DANO! Vida restante: %.1f\n", p->health);
-
-                // VERIFICAR SE O JOGADOR MORREU
-                if (p->health <= 0) {
-                    p->health = 0; // Evitar vida negativa
-                    printf("JOGADOR DERROTADO! FIM DE JOGO.\n");
-                    // MUDAR O ESTADO DO JOGO
-                    currentGameState = GAME_STATE_GAMEOVER;
-                }
-                
-                // DESATIVAR O SLIME para que ele não cause dano contínuo
-                currentSlime->ativo = false;
-                slime_was_deactivated = true;
-            }
+        // 2. Verificar se o slime deve ser removido (vida zerada OU colisão com jogador)
+        
+        // Condição de morte por falta de vida
+        if (currentSlime->health <= 0) {
+            currentSlime->ativo = false; // Marcar como inativo para a lógica abaixo
         }
 
-        // --- Lógica de Compactação do Array ---
-        // Se o slime foi desativado (por colisão com jogador OU projétil)
-        if (!slimes[i].ativo || slime_was_deactivated) {
+        // Condição de morte por colisão com jogador
+        float playerLeft   = p->position[0] - p->size[0] / 2.0f;
+        float playerRight  = p->position[0] + p->size[0] / 2.0f;
+        float playerBottom = p->position[1] - p->size[1] / 2.0f;
+        float playerTop    = p->position[1] + p->size[1] / 2.0f;
+
+        float slimeLeft   = currentSlime->x - currentSlime->raio;
+        float slimeRight  = currentSlime->x + currentSlime->raio;
+        float slimeBottom = currentSlime->y - currentSlime->raio;
+        float slimeTop    = currentSlime->y + currentSlime->raio;
+
+        if (playerLeft < slimeRight && playerRight > slimeLeft &&
+            playerBottom < slimeTop && playerTop > slimeBottom)
+        {
+            p->health -= SLIME_COLLISION_DAMAGE;
+            if (p->health <= 0) {
+                p->health = 0;
+                currentGameState = GAME_STATE_GAMEOVER;
+            }
+            currentSlime->ativo = false; // Marcar para remoção
+        }
+        
+        // 3. Lógica de compactação: se o slime foi marcado como inativo, remova-o
+        if (!currentSlime->ativo) {
+              // ===== PONTO CHAVE: CONTAR A MORTE E VERIFICAR FASE =====
+            g_KillsCount++; // Incrementa o contador de mortes
+            printf("Kills: %d / Phase: %d\n", g_KillsCount, g_CurrentPhase); // Debug
+
+            // Lógica de avanço de fase
+            if (g_CurrentPhase == 1 && g_KillsCount >= KILLS_FOR_PHASE_2) {
+                g_CurrentPhase = 2;
+                g_KillsAtPhaseStart = KILLS_FOR_PHASE_2; // <-- ATUALIZA O PONTO DE PARTIDA
+                printf("Avançou para a Fase 2!\n");
+            } else if (g_CurrentPhase == 2 && g_KillsCount >= KILLS_FOR_PHASE_3) {
+                g_CurrentPhase = 3;
+                g_KillsAtPhaseStart = KILLS_FOR_PHASE_3; // <-- ATUALIZA O PONTO DE PARTIDA
+                printf("Avançou para a Fase 3!\n");
+            } else if (g_CurrentPhase == 3 && g_KillsCount >= KILLS_FOR_VICTORY) {
+                printf("VITÓRIA!\n");
+                currentGameState = GAME_STATE_VICTORY; 
+            }
+            // ==========================================================
+
+            spawnParticleExplosion((vec2){currentSlime->x, currentSlime->y}, currentSlime->cor, 100);
             activeSlimesCount--;
             slimes[i] = slimes[activeSlimesCount];
-        } else {
+            slime_removed = true; 
+        }
+
+        if (!slime_removed) {
             i++;
         }
     }
@@ -761,38 +842,38 @@ void processInput(GLFWwindow *window, Player *p, float deltaTime) {
 
         // Rotação
         float rotation_change = PLAYER_ROTATION_SPEED * deltaTime;
-        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
-            p->angle += rotation_change; // Aumentar ângulo (sentido anti-horário em matemática, pode ser horário visualmente dependendo da sua convenção)
-        }
-        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
-            p->angle -= rotation_change; // Diminuir ângulo (sentido horário em matemática)
-        }
+        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) p->angle += rotation_change;
+        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) p->angle -= rotation_change;
 
-        timeSinceLastShot += deltaTime; // Atualiza o contador do cooldown
-
+        // Disparo
+        timeSinceLastShot += deltaTime;
         if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
             if (timeSinceLastShot >= FIRE_RATE) {
                 fireProjectile(p);
-                timeSinceLastShot = 0.0f; // Reseta o cooldown
+                timeSinceLastShot = 0.0f;
             }
         }
 
-        // Limites do Mapa (como antes)
-        float half_width = p->size[0] * 0.7f / 2.0f; // Use o tamanho visual para limites se desejar
-        float half_height = p->size[1] * 0.7f / 2.0f;
+        // ===== CORREÇÃO: LIMITAR O JOGADOR AOS LIMITES DA TELA ATUAL =====
+        float half_width = p->size[0] / 2.0f;
+        float half_height = p->size[1] / 2.0f;
         if (p->position[0] - half_width < 0.0f) p->position[0] = half_width;
-        if (p->position[0] + half_width > SCR_WIDTH) p->position[0] = SCR_WIDTH - half_width;
+        if (p->position[0] + half_width > g_CurrentScreenWidth) p->position[0] = g_CurrentScreenWidth - half_width;
         if (p->position[1] - half_height < 0.0f) p->position[1] = half_height;
-        if (p->position[1] + half_height > SCR_HEIGHT) p->position[1] = SCR_HEIGHT - half_height;
+        if (p->position[1] + half_height > g_CurrentScreenHeight) p->position[1] = g_CurrentScreenHeight - half_height;
     }
-    // Lógica de input para a tela de Game Over
     else if (currentGameState == GAME_STATE_GAMEOVER) {
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
             resetGame();
         }
+
+    // Verifica se a tecla 'M' foi pressionada para voltar ao menu
+        if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
+            currentGameState = GAME_STATE_MENU;
+        }
+
+
     }
-
-
 }
 
 unsigned int compile_shader(const char* source, GLenum type) {
@@ -856,10 +937,12 @@ void initializeProjectiles() {
 void drawProjectiles(unsigned int currentShaderProgram, unsigned int currentVAO, mat4 model_matrix_ref_placeholder) {
     mat4 model_proj_m;
     unsigned int modelLoc = glGetUniformLocation(currentShaderProgram, "model");
-    unsigned int colorLoc = glGetUniformLocation(currentShaderProgram, "objectColor_Solid"); // NOME CORRIGIDO
+    unsigned int colorLoc = glGetUniformLocation(currentShaderProgram, "objectColor_Solid");
 
-    vec3 projectile_color = {1.0f, 1.0f, 0.0f};
-    glUniform3fv(colorLoc, 1, projectile_color);
+    // ===== CORREÇÃO: MUDAR DE VEC3 PARA VEC4 =====
+    // Adicionar 1.0f para o canal Alpha (opacidade total)
+    vec4 projectile_color = {1.0f, 1.0f, 0.0f, 1.0f};
+    glUniform4fv(colorLoc, 1, (const GLfloat*)projectile_color); // Usar glUniform4fv
 
     glBindVertexArray(currentVAO);
 
@@ -877,9 +960,7 @@ void drawProjectiles(unsigned int currentShaderProgram, unsigned int currentVAO,
     }
 }
 
-
 void fireProjectile(Player* p) {
-    // Encontrar um projétil inativo para reutilizar
     int projectileIndex = -1;
     for (int i = 0; i < MAX_PROJECTILES; ++i) {
         if (!projectiles[i].active) {
@@ -888,47 +969,30 @@ void fireProjectile(Player* p) {
         }
     }
 
-    if (projectileIndex == -1) {
-        // printf("Sem projéteis disponíveis!\n");
-        return; // Todos os projéteis estão ativos
-    }
+    if (projectileIndex == -1) { return; }
 
     Projectile* proj = &projectiles[projectileIndex];
 
     proj->active = true;
     proj->speed = PROJECTILE_SPEED;
-    proj->size = PROJECTILE_SIZE;
-    proj->angle = p->angle; // Projétil disparado na direção que o jogador está olhando
+    // ===== CORREÇÃO: APLICAR FATOR DE ESCALA AO TAMANHO DO PROJÉTIL =====
+    proj->size = PROJECTILE_SIZE * g_ScaleFactor;
+    proj->angle = p->angle;
     proj->lifetime = PROJECTILE_LIFETIME;
 
-    // Calcular a posição inicial do projétil
-    // Começa na "ponta da arma". A arma já tem um offset do centro do jogador.
-    // Queremos que o projétil apareça um pouco à frente da ponta da arma.
-
-    // 1. Posição base (centro do jogador)
+    // A lógica de offset da arma já usa player.size, que agora é escalado,
+    // então o cálculo do ponto de disparo já está correto.
     vec2 start_pos;
     glm_vec2_copy(p->position, start_pos);
-
-    // 2. Vetor da direção do jogador/arma
     float dirX = cosf(p->angle);
     float dirY = sinf(p->angle);
-
-    // 3. Distância do centro do jogador até a "ponta" da arma (aproximado)
-    //    weapon_offset_distance é o offset do *centro* da arma
-    //    weapon_width é a largura total da arma
-    //    Então, a ponta da arma está em weapon_offset_distance + weapon_width / 2
-    //    ao longo da direção da arma.
-    float weapon_actual_width = p->size[0] * 0.6f; // Mesma da renderização da arma
-    float weapon_offset_from_player_center = p->size[0] * 0.4f; // Mesmo da renderização
-    
-    float gun_tip_offset = weapon_offset_from_player_center + (weapon_actual_width / 2.0f) + (proj->size / 2.0f); // Adiciona metade do tamanho do projétil para ele aparecer na ponta
-
+    float weapon_actual_width = p->size[0] * 0.6f;
+    float weapon_offset_from_player_center = p->size[0] * 0.4f;
+    float gun_tip_offset = weapon_offset_from_player_center + (weapon_actual_width / 2.0f) + (proj->size / 2.0f);
     start_pos[0] += dirX * gun_tip_offset;
     start_pos[1] += dirY * gun_tip_offset;
-
     glm_vec2_copy(start_pos, proj->position);
-
-    // Definir velocidade baseada no ângulo e velocidade escalar
+    
     proj->velocity[0] = dirX * proj->speed;
     proj->velocity[1] = dirY * proj->speed;
 }
@@ -938,34 +1002,27 @@ void updateProjectiles(float deltaTime) {
         if (projectiles[i].active) {
             Projectile* proj = &projectiles[i];
 
-            // --- LÓGICA DE MOVIMENTO E LIFETIME (BLOCO FALTANTE) ---
-            // 1. Mover o projétil usando sua velocidade e o tempo decorrido
             proj->position[0] += proj->velocity[0] * deltaTime;
             proj->position[1] += proj->velocity[1] * deltaTime;
 
-            // 2. Reduzir o tempo de vida do projétil
             proj->lifetime -= deltaTime;
             if (proj->lifetime <= 0.0f) {
                 proj->active = false;
-                continue; // Pular para o próximo projétil, não precisa checar colisão
+                continue;
             }
 
-            // 3. (Opcional) Desativar se sair da tela
-            if (proj->position[0] < 0 || proj->position[0] > SCR_WIDTH ||
-                proj->position[1] < 0 || proj->position[1] > SCR_HEIGHT) {
+            // ===== CORREÇÃO: VERIFICAR LIMITES DA TELA ATUAL =====
+            if (proj->position[0] < 0 || proj->position[0] > g_CurrentScreenWidth ||
+                proj->position[1] < 0 || proj->position[1] > g_CurrentScreenHeight) {
                 proj->active = false;
                 continue;
             }
-            // --- FIM DO BLOCO FALTANTE ---
 
-
-            // --- COLISÃO PROJÉTIL-SLIME ---
-            // A lógica aqui permanece a mesma que na sugestão anterior
-            for (int j = 0; j < activeSlimesCount; ++j) {
+            // Colisão Projétil-Slime (sem alterações aqui)
+            for (int j = 0; j < MAX_SLIMES; ++j) { // Itera sobre todo o array
                 if (slimes[j].ativo) {
                     Slime* currentSlime = &slimes[j];
 
-                    // Detecção de colisão AABB
                     float projLeft = proj->position[0] - proj->size / 2.0f;
                     float projRight = proj->position[0] + proj->size / 2.0f;
                     float projBottom = proj->position[1] - proj->size / 2.0f;
@@ -979,23 +1036,17 @@ void updateProjectiles(float deltaTime) {
                     if (projLeft < slimeRight && projRight > slimeLeft &&
                         projBottom < slimeTop && projTop > slimeBottom) {
                         
-                        proj->active = false; // Desativar projétil
-                        currentSlime->health -= PROJECTILE_DAMAGE; // Aplicar dano
+                        proj->active = false;
+                        currentSlime->health -= PROJECTILE_DAMAGE;
 
-                        printf("Slime %d sofreu dano! Vida restante: %.1f\n", j, currentSlime->health);
-
-                        if (currentSlime->health <= 0) {
-                            slimes[j].ativo = false; // Desativar slime se a vida acabar
-                            printf("Slime %d foi derrotado!\n", j);
-                        }
-                        
-                        break; // Sair do loop de slimes, pois o projétil já foi consumido
+                        break;
                     }
                 }
             }
         }
     }
 }
+
 
 unsigned int loadTexture(const char *path) {
     unsigned int textureID;
@@ -1066,13 +1117,20 @@ void setupBackgroundGeometry() {
     glBindVertexArray(0);
 }
 
-
 void resetGame() {
     printf("Iniciando/Reiniciando jogo com dificuldade: %d\n", selectedDifficulty);
 
+    // ===== RESETAR VARIÁVEIS DE FASE =====
+    g_CurrentPhase = 1;
+    g_KillsCount = 0;
+    g_KillsAtPhaseStart = 0; // <-- RESETE AQUI TAMBÉM
+    g_ShowingVictoryScreen = false;
+    g_VictoryScreenTimer = 10.0f;
+    // ===================================
+
     // Aplicar configurações de dificuldade
     if (selectedDifficulty == DIFFICULTY_EASY) {
-        SLIME_MAX_HEALTH= 80.0f;
+        SLIME_MAX_HEALTH = 80.0f;
         SLIME_SPEED = 80.0f;
         spawnInterval = 4.0f;
     } else if (selectedDifficulty == DIFFICULTY_NORMAL) {
@@ -1085,35 +1143,32 @@ void resetGame() {
         spawnInterval = 2.0f;
     }
 
-    // Resetar jogador
-    player.position[0] = SCR_WIDTH / 2.0f;
-    player.position[1] = SCR_HEIGHT / 2.0f;
+   // Resetar jogador
+    player.position[0] = g_CurrentScreenWidth / 2.0f;
+    player.position[1] = g_CurrentScreenHeight / 2.0f;
     player.angle = 0.0f;
     player.health = PLAYER_MAX_HEALTH;
-    
-    // ===== CORREÇÃO AQUI =====
-    // Inicialize a vida máxima e o tamanho do jogador
     player.maxHealth = PLAYER_MAX_HEALTH;
-    player.size[0] = 50.0f; // Defina um tamanho visual para o jogador. 50x50 pixels é um bom começo.
-    player.size[1] = 50.0f; // Ajuste conforme a sua imagem de sprite.
-    // =========================
+    
+    // ===== CORREÇÃO: APLICAR FATOR DE ESCALA AO TAMANHO DO JOGADOR =====
+    player.size[0] = 50.0f * g_ScaleFactor;
+    player.size[1] = 50.0f * g_ScaleFactor;
 
-    // Resetar slimes e projéteis
+    // (O resto da função permanece igual)
     initializeSlimes();
     initializeProjectiles();
-
-    // Resetar contadores de tempo
+    initializeParticles();
     timeSinceLastSpawn = 0.0f;
     timeSinceLastShot = 0.0f;
-
-    // Mudar o estado para JOGANDO
     currentGameState = GAME_STATE_PLAYING;
 }
+
 
 // Callback para posição do mouse
 void mouse_pos_callback(GLFWwindow* window, double xpos, double ypos) {
     mouseX = xpos;
-    mouseY = SCR_HEIGHT - ypos; // Inverte Y
+    // mouseY = SCR_HEIGHT - ypos; // Inverte Y
+    mouseY = g_CurrentScreenHeight - ypos; // NOVA LINHA (inverte Y usando altura atual)
 }
 
 // Callback para cliques do mouse
@@ -1154,3 +1209,97 @@ void checkMenuButtonHovers() {
     difficultyButton_Normal.is_hovered = is_hovering_difficulty;
     difficultyButton_Hard.is_hovered = is_hovering_difficulty;
 }
+
+
+
+// Zera todas as partículas. Chame em `resetGame()` e na `main()` uma vez.
+void initializeParticles() {
+    for (int i = 0; i < MAX_PARTICLES; ++i) {
+        particles[i].active = false;
+    }
+}
+
+// Encontra a primeira partícula inativa no array para reutilizar.
+unsigned int firstInactiveParticle() {
+    for (int i = 0; i < MAX_PARTICLES; ++i) {
+        if (!particles[i].active) {
+            return i;
+        }
+    }
+    // Se não encontrar, reutiliza a primeira (fallback)
+    return 0;
+}
+
+// Cria uma explosão de partículas em um local.
+void spawnParticleExplosion(vec2 position, vec3 baseColor, int count) {
+    for (int i = 0; i < count; i++) {
+        unsigned int p_idx = firstInactiveParticle();
+        Particle* p = &particles[p_idx];
+
+        p->active = true;
+        p->life = PARTICLE_LIFETIME;
+        glm_vec2_copy(position, p->position);
+
+        // Cor inicial é a do slime, com opacidade total
+        p->color[0] = baseColor[0];
+        p->color[1] = baseColor[1];
+        p->color[2] = baseColor[2];
+        p->color[3] = 1.0f; // Alpha
+
+        // Velocidade aleatória em todas as direções
+        float angle = ((float)rand() / (float)RAND_MAX) * 2.0f * 3.14159f;
+        float speed = PARTICLE_SPEED * (0.5f + ((float)rand() / (float)RAND_MAX) * 0.5f);
+        p->velocity[0] = cosf(angle) * speed * g_ScaleFactor;
+        p->velocity[1] = sinf(angle) * speed * g_ScaleFactor;
+    }
+}
+
+// Atualiza a posição, vida e cor de todas as partículas ativas.
+void updateParticles(float deltaTime) {
+    for (int i = 0; i < MAX_PARTICLES; ++i) {
+        if (particles[i].active) {
+            Particle* p = &particles[i];
+            
+            p->life -= deltaTime;
+            if (p->life <= 0.0f) {
+                p->active = false;
+                continue;
+            }
+
+            p->position[0] += p->velocity[0] * deltaTime;
+            p->position[1] += p->velocity[1] * deltaTime;
+            
+            // A transparência (alpha) diminui conforme a vida acaba
+            p->color[3] = p->life / PARTICLE_LIFETIME;
+        }
+    }
+}
+
+// Desenha todas as partículas ativas na tela.
+void drawParticles(unsigned int shaderProgram, unsigned int vao) {
+    glUniform1i(glGetUniformLocation(shaderProgram, "useTexture"), false);
+    unsigned int modelLoc = glGetUniformLocation(shaderProgram, "model");
+    unsigned int colorLoc = glGetUniformLocation(shaderProgram, "objectColor_Solid");
+
+    glBindVertexArray(vao);
+    for (int i = 0; i < MAX_PARTICLES; ++i) {
+        if (particles[i].active) {
+            Particle* p = &particles[i];
+            
+            // Envia a cor com transparência para o shader
+            glUniform4fv(colorLoc, 1, p->color);
+            
+            mat4 model_particle;
+            glm_mat4_identity(model_particle);
+            glm_translate(model_particle, (vec3){p->position[0], p->position[1], 0.0f});
+            
+            // Partículas são pequenos quadrados
+            float particleSize = 3.0f * g_ScaleFactor;
+            glm_scale(model_particle, (vec3){particleSize, particleSize, 1.0f});
+            
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const GLfloat*)model_particle);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        }
+    }
+}
+
