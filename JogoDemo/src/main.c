@@ -1,3 +1,6 @@
+// PARA COMPILAR:
+// gcc src/main.c src/glad.c -o MeuJogo -Iinclude -lglfw -lGL -lm -ldl -pthread
+
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #define STB_IMAGE_IMPLEMENTATION
 
@@ -13,56 +16,47 @@
 #include <stdbool.h> // Para bool, true, false
 
 #define MAX_SLIMES 20       // Número máximo de slimes que podem existir ao mesmo tempo
-int SLIME_SPEED = 150.0f;  // Velocidade dos slimes
-
 #define GIANT_SLIME_CHANCE 5 // Chance de 1 em 5 de um slime ser gigante
 #define GIANT_SLIME_SIZE_MULTIPLIER 1.8f // 80% maior que o normal
 #define GIANT_SLIME_HEALTH_MULTIPLIER 3.0f // 3x mais vida
-
-
 #define MAX_PROJECTILES 50
 #define PROJECTILE_SPEED 500.0f
 #define PROJECTILE_SIZE 10.0f
 #define PROJECTILE_LIFETIME 2.0f // Segundos
 #define FIRE_RATE 0.25f // Segundos entre disparos (4 tiros por segundo)
 #define PROJECTILE_DAMAGE 25.0f // Cada tiro tira 25 de vida
-int SLIME_MAX_HEALTH = 100.0f; // Slimes começam com 100 de vida
 #define PLAYER_MAX_HEALTH 100.0f
 #define SLIME_COLLISION_DAMAGE 25.0f // Dano que o slime causa ao colidir
 #define MAX_PARTICLES 500       // Máximo de partículas na tela ao mesmo tempo
 #define PARTICLE_LIFETIME 1.0f  // Segundos que uma partícula vive
 #define PARTICLE_SPEED 100.0f   // Velocidade base das partículas
 
-
-int g_CurrentPhase = 1;
-int g_KillsCount = 0;
-int g_KillsAtPhaseStart = 0; // <-- NOVA VARIÁVEL
-const int KILLS_FOR_PHASE_2 = 15;
-const int KILLS_FOR_PHASE_3 = 25; // Mortes TOTAIS, não 25 a mais
-const int KILLS_FOR_VICTORY = 40; // Mortes TOTAIS para vencer
+int SLIME_SPEED = 150.0f;  // Velocidade dos slimes
+int SLIME_MAX_HEALTH = 100.0f; // Slimes começam com 100 de vida
 
 // Timers e estados para a tela de vitória
 bool g_ShowingVictoryScreen = false;
 float g_VictoryScreenTimer = 10.0f; // 10 segundos
 
-
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
-
-unsigned int g_CurrentScreenWidth = SCR_WIDTH;
-unsigned int g_CurrentScreenHeight = SCR_HEIGHT;
-mat4 g_ProjectionMatrix; // Vamos usar esta para a projeção da UI e do jogo
-
-float g_ScaleFactor = 1.0f; // Fator de escala para os objetos do jogo
+mat4 g_ProjectionMatrix;
 
 const float PLAYER_SPEED = 250.0f; // Pixels por segundo (ajustei um pouco para cima)
 const float PLAYER_ROTATION_SPEED = 3.0f; // Radianos por segundo (ajuste conforme necessário)
-// const char *caminho_background = "shaders/chao/Ground_01.png"; // Caminho para a textura de fundo
-const char *caminho_background = "shaders/chao/fundo_ia1.png"; // Caminho para a textura de fundo
-const char *caminho_player = "shaders/player/handgun/idle/survivor-idle_handgun_1.png"; // Caminho para a textura do jogador
-const char *caminho_game_over = "shaders/interfaces/gameover.png"; // Caminho para a imagem
-
+const char *caminho_background = "shaders/chao/fundo_ia1.png";
+const char *caminho_player = "shaders/player/handgun/idle/survivor-idle_handgun_1.png";
+const char *caminho_game_over = "shaders/interfaces/gameover.png";
 const char *caminho_menu_title = "assets/menu_title.png";
+const unsigned int SCR_WIDTH = 800;
+const unsigned int SCR_HEIGHT = 600;
+unsigned int g_CurrentScreenWidth = SCR_WIDTH;
+unsigned int g_CurrentScreenHeight = SCR_HEIGHT;
+float g_ScaleFactor = 1.0f; // Fator de escala para os objetos do jogo
+int g_CurrentPhase = 1;
+int g_KillsCount = 0;
+int g_KillsAtPhaseStart = 0;
+const int KILLS_FOR_PHASE_2 = 15;
+const int KILLS_FOR_PHASE_3 = 25; // Mortes TOTAIS, não 25 a mais
+const int KILLS_FOR_VICTORY = 40; // Mortes TOTAIS para vencer
 
 
 typedef struct {
@@ -90,7 +84,7 @@ typedef struct {
     float angle;      // Ângulo em que foi disparado (para saber sua direção)
     float size;       // Tamanho do projétil (ex: lado de um quadrado)
     bool active;
-    float lifetime;   // Opcional: quanto tempo o projétil vive antes de desaparecer
+    float lifetime;
 } Projectile;
 
 
@@ -108,7 +102,7 @@ typedef enum {
     DIFFICULTY_HARD
 } Difficulty;
 
-// Struct para representar um botão na tela
+
 typedef struct {
     float x, y, width, height; // Posição (centro) e dimensões
     unsigned int texture_normal;
@@ -120,12 +114,13 @@ typedef struct {
 typedef struct {
     vec2 position;
     vec2 velocity;
-    vec4 color;    // Usamos vec4 para incluir o Alpha (transparência)
+    vec4 color;
     float life;
     bool active;
 } Particle;
 
 
+// Assinaturas das funcoes
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow *window, Player *player, float deltaTime);
 unsigned int compile_shader(const char* source, GLenum type);
@@ -135,11 +130,11 @@ void spawnSlime();
 void updateSlimes(float deltaTime, Player* player);
 void drawSlimes(unsigned int gameObjectShaderProgram, unsigned int gameObjectVAO, mat4 model_m_ref);
 void initializeProjectiles();
-void fireProjectile(Player* p); // Passa o jogador para saber de onde e para onde atirar
+void fireProjectile(Player* p);
 void updateProjectiles(float deltaTime);
 void drawProjectiles(unsigned int currentShaderProgram, unsigned int currentVAO, mat4 model_matrix_ref_placeholder);
-unsigned int loadTexture(const char *path); // Nova função
-void setupBackgroundGeometry(); // Adicionado protótipo
+unsigned int loadTexture(const char *path);
+void setupBackgroundGeometry();
 void resetGame();
 void drawText(unsigned int shaderProgram, unsigned int vao, const char* text, float x, float y, float scale);
 void drawCharacter(unsigned int shaderProgram, unsigned int vao, char character, float x, float y, float scale);
@@ -172,7 +167,6 @@ double mouseX, mouseY;
 bool key_up_pressed_last_frame = false;
 bool key_down_pressed_last_frame = false;
 
-// Recursos do Fundo
 // IDs das texturas
 unsigned int backgroundTextureID_Phase1;
 unsigned int backgroundTextureID_Phase2;
@@ -181,7 +175,7 @@ unsigned int victoryTextureID;
 unsigned int slimeFaceTextureID;
 unsigned int backgroundTextureID;
 unsigned int menuBackgroundTextureID;
-unsigned int gameOverTextureID; // ID para a textura da tela de Game Over
+unsigned int gameOverTextureID;
 unsigned int backgroundVAO, backgroundVBO, backgroundEBO;
 unsigned int backgroundShaderProgram;
 
@@ -206,8 +200,6 @@ const char *fragmentShaderSource = "#version 330 core\n"
     "uniform sampler2D objectTexture_Sampler;\n"
     "uniform bool useTexture;\n"
     
-    // ===== CORREÇÃO: MUDAR DE VEC3 PARA VEC4 =====
-    // Agora a cor sólida inclui o canal Alpha (transparência)
     "uniform vec4 objectColor_Solid;\n"
     
     "void main()\n"
@@ -217,13 +209,11 @@ const char *fragmentShaderSource = "#version 330 core\n"
     "       if(texColor.a < 0.1) discard;\n"
     "       FragColor = texColor;\n"
     "   } else {\n"
-    // ===== CORREÇÃO: USAR DIRETAMENTE A COR VEC4 =====
     "       FragColor = objectColor_Solid;\n"
     "   }\n"
     "}\0";
 
-// Shaders para o FUNDO (texturizado) - MOVENDO PARA ESCOPO GLOBAL
-const char *backgroundVertexShaderSource_global = "#version 330 core\n" // Renomeado para evitar conflito se houvesse local
+const char *backgroundVertexShaderSource_global = "#version 330 core\n"
     "layout (location = 0) in vec3 aPos;\n"
     "layout (location = 1) in vec2 aTexCoord;\n"
     "out vec2 TexCoord;\n"
@@ -236,7 +226,7 @@ const char *backgroundVertexShaderSource_global = "#version 330 core\n" // Renom
     "   TexCoord = aTexCoord;\n"
     "}\0";
 
-const char *backgroundFragmentShaderSource_global = "#version 330 core\n" // Renomeado
+const char *backgroundFragmentShaderSource_global = "#version 330 core\n"
     "out vec4 FragColor;\n"
     "in vec2 TexCoord;\n"
     "uniform sampler2D backgroundTexture;\n"
@@ -337,10 +327,10 @@ int main() {
     difficultyButton_Normal.texture_hover = loadTexture("shaders/interfaces/medio_selecionado.png");
     difficultyButton_Hard.texture_normal = loadTexture("shaders/interfaces/dificil.png");
     difficultyButton_Hard.texture_hover = loadTexture("shaders/interfaces/dificil_selecionado.png");
-    backgroundTextureID_Phase1 = loadTexture(caminho_background); // ou 
-    backgroundTextureID_Phase2 = loadTexture("shaders/chao/fundo_fase2.png"); // <-- NOVA
-    backgroundTextureID_Phase3 = loadTexture("shaders/chao/fundo_fase3.png"); // <-- NOVA
-    victoryTextureID = loadTexture("shaders/interfaces/tela_vitoria.png"); // <-- NOVA
+    backgroundTextureID_Phase1 = loadTexture(caminho_background);
+    backgroundTextureID_Phase2 = loadTexture("shaders/chao/fundo_fase2.png");
+    backgroundTextureID_Phase3 = loadTexture("shaders/chao/fundo_fase3.png");
+    victoryTextureID = loadTexture("shaders/interfaces/tela_vitoria.png");
 
     // 8. CONFIGURAR ESTADO INICIAL DO JOGO
     startButton.width = 300.0f; startButton.height = 140.0f;
@@ -397,7 +387,7 @@ int main() {
             // RENDERIZAÇÃO DIRETA NA TELA
             // Desenhar fundo
             glUniform1i(useTextureLoc, true);
-             unsigned int currentBackgroundID;
+            unsigned int currentBackgroundID;
         if (g_CurrentPhase == 1) {
             currentBackgroundID = backgroundTextureID_Phase1;
         } else if (g_CurrentPhase == 2) {
@@ -511,7 +501,7 @@ int main() {
 
         }
         else if (currentGameState == GAME_STATE_GAMEOVER) {
-          glUniform1i(useTextureLoc, true);
+        glUniform1i(useTextureLoc, true);
         glBindTexture(GL_TEXTURE_2D, backgroundTextureID);
         mat4 model_bg;
         glm_mat4_identity(model_bg);
@@ -606,6 +596,7 @@ int main() {
     return 0;
 }
 
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     if (width == 0 || height == 0) return;
 
@@ -619,8 +610,6 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     // Usamos a altura como base para manter a proporção correta dos sprites.
     g_ScaleFactor = (float)height / (float)SCR_HEIGHT;
 
-    
-    // Recalcular posições dos botões do menu (seu código para isso já está correto)
     startButton.x = (float)g_CurrentScreenWidth / 2.0f;
     startButton.y = (float)g_CurrentScreenHeight / 2.0f + 50.0f; // Manter offset em pixels
     float diff_btn_x = (float)g_CurrentScreenWidth / 2.0f;
@@ -629,13 +618,14 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     difficultyButton_Easy.y = difficultyButton_Normal.y = difficultyButton_Hard.y = diff_btn_y;
 }
 
+
+// Funcoes para SLIMES
 void initializeSlimes() {
     for (int i = 0; i < MAX_SLIMES; ++i) {
         slimes[i].ativo = false;
     }
     activeSlimesCount = 0;
 }
-
 
 void spawnSlime() {
     if (activeSlimesCount >= MAX_SLIMES) {
@@ -828,6 +818,8 @@ void updateSlimes(float deltaTime, Player* p) {
     }
 }
 
+
+// Funcoes para INPUT, TEXTURAS E FUNCIONALIDADES DO JOGO
 void processInput(GLFWwindow *window, Player *p, float deltaTime) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
@@ -926,7 +918,121 @@ unsigned int create_shader_program(const char* vertex_source, const char* fragme
     return gameObjectShaderProgram;
 }
 
+unsigned int loadTexture(const char *path) {
+    unsigned int textureID;
+    glGenTextures(1, &textureID);
 
+    int width, height, nrComponents;
+   
+    stbi_set_flip_vertically_on_load(true); 
+   
+    unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 0);
+   
+    if (data) {
+        GLenum format = GL_RGB; // Padrão para RGB
+        if (nrComponents == 1)
+            format = GL_RED;
+        else if (nrComponents == 3)
+            format = GL_RGB;
+        else if (nrComponents == 4)
+            format = GL_RGBA;
+        else {
+            fprintf(stderr, "Formato de imagem não suportado para %s (componentes: %d)\n", path, nrComponents);
+            stbi_image_free(data);
+            return 0;
+        }
+
+        glBindTexture(GL_TEXTURE_2D, textureID);
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        stbi_image_free(data);
+        printf("Textura carregada: %s (ID: %u, %dx%d, Comp: %d)\n", path, textureID, width, height, nrComponents);
+    } else {
+        fprintf(stderr, "Falha ao carregar textura: %s. Erro STB: %s\n", path, stbi_failure_reason());
+        return 0;
+    }
+    return textureID;
+}
+
+void setupBackgroundGeometry() {
+    float backgroundVerticesData[] = { // Renomeado para evitar conflito de nome
+         (float)SCR_WIDTH, (float)SCR_HEIGHT, 0.0f,  1.0f, 1.0f,
+         (float)SCR_WIDTH, 0.0f,              0.0f,  1.0f, 0.0f,
+         0.0f,             0.0f,              0.0f,  0.0f, 0.0f,
+         0.0f,             (float)SCR_HEIGHT, 0.0f,  0.0f, 1.0f
+    };
+    unsigned int backgroundIndicesData[] = { 0, 1, 3, 1, 2, 3 }; // Renomeado
+
+    glGenVertexArrays(1, &backgroundVAO); // Usa a variável global backgroundVAO
+    glGenBuffers(1, &backgroundVBO);     // Usa a variável global backgroundVBO
+    glGenBuffers(1, &backgroundEBO);     // Usa a variável global backgroundEBO
+
+    glBindVertexArray(backgroundVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, backgroundVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(backgroundVerticesData), backgroundVerticesData, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, backgroundEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(backgroundIndicesData), backgroundIndicesData, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glBindVertexArray(0);
+}
+
+void resetGame() {
+    printf("Iniciando/Reiniciando jogo com dificuldade: %d\n", selectedDifficulty);
+
+    // ===== RESETAR VARIÁVEIS DE FASE =====
+    g_CurrentPhase = 1;
+    g_KillsCount = 0;
+    g_KillsAtPhaseStart = 0;
+    g_ShowingVictoryScreen = false;
+    g_VictoryScreenTimer = 10.0f;
+    // ===================================
+
+    // Aplicar configurações de dificuldade
+    if (selectedDifficulty == DIFFICULTY_EASY) {
+        SLIME_MAX_HEALTH = 80.0f;
+        SLIME_SPEED = 80.0f;
+        spawnInterval = 4.0f;
+    } else if (selectedDifficulty == DIFFICULTY_NORMAL) {
+        SLIME_MAX_HEALTH = 100.0f;
+        SLIME_SPEED = 100.0f;
+        spawnInterval = 3.0f;
+    } else if (selectedDifficulty == DIFFICULTY_HARD) {
+        SLIME_MAX_HEALTH = 150.0f;
+        SLIME_SPEED = 130.0f;
+        spawnInterval = 2.0f;
+    }
+
+   // Resetar jogador
+    player.position[0] = g_CurrentScreenWidth / 2.0f;
+    player.position[1] = g_CurrentScreenHeight / 2.0f;
+    player.angle = 0.0f;
+    player.health = PLAYER_MAX_HEALTH;
+    player.maxHealth = PLAYER_MAX_HEALTH;
+    
+    // ===== CORREÇÃO: APLICAR FATOR DE ESCALA AO TAMANHO DO JOGADOR =====
+    player.size[0] = 50.0f * g_ScaleFactor;
+    player.size[1] = 50.0f * g_ScaleFactor;
+
+    initializeSlimes();
+    initializeProjectiles();
+    initializeParticles();
+    timeSinceLastSpawn = 0.0f;
+    timeSinceLastShot = 0.0f;
+    currentGameState = GAME_STATE_PLAYING;
+}
+
+
+// Funcoes para PROJETEIS
 void initializeProjectiles() {
     for (int i = 0; i < MAX_PROJECTILES; ++i) {
         projectiles[i].active = false;
@@ -1048,130 +1154,13 @@ void updateProjectiles(float deltaTime) {
 }
 
 
-unsigned int loadTexture(const char *path) {
-    unsigned int textureID;
-    glGenTextures(1, &textureID);
-
-    int width, height, nrComponents;
-    // stbi_set_flip_vertically_on_load(true); // Descomente se a textura estiver de cabeça para baixo
-   
-    stbi_set_flip_vertically_on_load(true); 
-   
-    unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 0);
-   
-    if (data) {
-        GLenum format = GL_RGB; // Padrão para RGB
-        if (nrComponents == 1)
-            format = GL_RED;
-        else if (nrComponents == 3)
-            format = GL_RGB;
-        else if (nrComponents == 4)
-            format = GL_RGBA;
-        else {
-            fprintf(stderr, "Formato de imagem não suportado para %s (componentes: %d)\n", path, nrComponents);
-            stbi_image_free(data);
-            return 0;
-        }
-
-        glBindTexture(GL_TEXTURE_2D, textureID);
-        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        stbi_image_free(data);
-        printf("Textura carregada: %s (ID: %u, %dx%d, Comp: %d)\n", path, textureID, width, height, nrComponents);
-    } else {
-        fprintf(stderr, "Falha ao carregar textura: %s. Erro STB: %s\n", path, stbi_failure_reason());
-        return 0;
-    }
-    return textureID;
-}
-
-void setupBackgroundGeometry() {
-    float backgroundVerticesData[] = { // Renomeado para evitar conflito de nome
-         (float)SCR_WIDTH, (float)SCR_HEIGHT, 0.0f,  1.0f, 1.0f,
-         (float)SCR_WIDTH, 0.0f,              0.0f,  1.0f, 0.0f,
-         0.0f,             0.0f,              0.0f,  0.0f, 0.0f,
-         0.0f,             (float)SCR_HEIGHT, 0.0f,  0.0f, 1.0f
-    };
-    unsigned int backgroundIndicesData[] = { 0, 1, 3, 1, 2, 3 }; // Renomeado
-
-    glGenVertexArrays(1, &backgroundVAO); // Usa a variável global backgroundVAO
-    glGenBuffers(1, &backgroundVBO);     // Usa a variável global backgroundVBO
-    glGenBuffers(1, &backgroundEBO);     // Usa a variável global backgroundEBO
-
-    glBindVertexArray(backgroundVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, backgroundVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(backgroundVerticesData), backgroundVerticesData, GL_STATIC_DRAW);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, backgroundEBO);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(backgroundIndicesData), backgroundIndicesData, GL_STATIC_DRAW);
-
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
-}
-
-void resetGame() {
-    printf("Iniciando/Reiniciando jogo com dificuldade: %d\n", selectedDifficulty);
-
-    // ===== RESETAR VARIÁVEIS DE FASE =====
-    g_CurrentPhase = 1;
-    g_KillsCount = 0;
-    g_KillsAtPhaseStart = 0; // <-- RESETE AQUI TAMBÉM
-    g_ShowingVictoryScreen = false;
-    g_VictoryScreenTimer = 10.0f;
-    // ===================================
-
-    // Aplicar configurações de dificuldade
-    if (selectedDifficulty == DIFFICULTY_EASY) {
-        SLIME_MAX_HEALTH = 80.0f;
-        SLIME_SPEED = 80.0f;
-        spawnInterval = 4.0f;
-    } else if (selectedDifficulty == DIFFICULTY_NORMAL) {
-        SLIME_MAX_HEALTH = 100.0f;
-        SLIME_SPEED = 100.0f;
-        spawnInterval = 3.0f;
-    } else if (selectedDifficulty == DIFFICULTY_HARD) {
-        SLIME_MAX_HEALTH = 150.0f;
-        SLIME_SPEED = 130.0f;
-        spawnInterval = 2.0f;
-    }
-
-   // Resetar jogador
-    player.position[0] = g_CurrentScreenWidth / 2.0f;
-    player.position[1] = g_CurrentScreenHeight / 2.0f;
-    player.angle = 0.0f;
-    player.health = PLAYER_MAX_HEALTH;
-    player.maxHealth = PLAYER_MAX_HEALTH;
-    
-    // ===== CORREÇÃO: APLICAR FATOR DE ESCALA AO TAMANHO DO JOGADOR =====
-    player.size[0] = 50.0f * g_ScaleFactor;
-    player.size[1] = 50.0f * g_ScaleFactor;
-
-    // (O resto da função permanece igual)
-    initializeSlimes();
-    initializeProjectiles();
-    initializeParticles();
-    timeSinceLastSpawn = 0.0f;
-    timeSinceLastShot = 0.0f;
-    currentGameState = GAME_STATE_PLAYING;
-}
-
-
-// Callback para posição do mouse
+// Funcoes para MOUSE E INTERAÇÕES DO MENU
 void mouse_pos_callback(GLFWwindow* window, double xpos, double ypos) {
     mouseX = xpos;
     // mouseY = SCR_HEIGHT - ypos; // Inverte Y
     mouseY = g_CurrentScreenHeight - ypos; // NOVA LINHA (inverte Y usando altura atual)
 }
 
-// Callback para cliques do mouse
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     if (currentGameState != GAME_STATE_MENU) return;
 
@@ -1189,7 +1178,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
-// Função para verificar se o mouse está sobre os botões
 void checkMenuButtonHovers() {
     // Botão Iniciar
     float start_left = startButton.x - startButton.width / 2.0f;
@@ -1211,15 +1199,13 @@ void checkMenuButtonHovers() {
 }
 
 
-
-// Zera todas as partículas. Chame em `resetGame()` e na `main()` uma vez.
+// Funcoes para PARTICULAS
 void initializeParticles() {
     for (int i = 0; i < MAX_PARTICLES; ++i) {
         particles[i].active = false;
     }
 }
 
-// Encontra a primeira partícula inativa no array para reutilizar.
 unsigned int firstInactiveParticle() {
     for (int i = 0; i < MAX_PARTICLES; ++i) {
         if (!particles[i].active) {
@@ -1230,7 +1216,6 @@ unsigned int firstInactiveParticle() {
     return 0;
 }
 
-// Cria uma explosão de partículas em um local.
 void spawnParticleExplosion(vec2 position, vec3 baseColor, int count) {
     for (int i = 0; i < count; i++) {
         unsigned int p_idx = firstInactiveParticle();
@@ -1254,7 +1239,6 @@ void spawnParticleExplosion(vec2 position, vec3 baseColor, int count) {
     }
 }
 
-// Atualiza a posição, vida e cor de todas as partículas ativas.
 void updateParticles(float deltaTime) {
     for (int i = 0; i < MAX_PARTICLES; ++i) {
         if (particles[i].active) {
@@ -1275,7 +1259,6 @@ void updateParticles(float deltaTime) {
     }
 }
 
-// Desenha todas as partículas ativas na tela.
 void drawParticles(unsigned int shaderProgram, unsigned int vao) {
     glUniform1i(glGetUniformLocation(shaderProgram, "useTexture"), false);
     unsigned int modelLoc = glGetUniformLocation(shaderProgram, "model");
