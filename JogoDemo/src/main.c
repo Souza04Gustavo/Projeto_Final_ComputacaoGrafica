@@ -1,5 +1,58 @@
-// PARA COMPILAR:
+// PARA COMPILAR E EXECUTAR O JOGO (APARTIR DO DIRECTÓRIO RAIZ DO TRABALHO):
+// cd JogoDemo
 // gcc src/main.c src/glad.c -o MeuJogo -Iinclude -lglfw -lGL -lm -ldl -pthread
+// ./MeuJogo
+
+/*
+==============================================================================
+    VISÃO GERAL DA STACK GRÁFICA E JUSTIFICATIVAS DAS ESCOLHAS
+==============================================================================
+Este comentário destina-se a explicar as decisões técnicas por trás da
+escolha da versão do OpenGL e das bibliotecas auxiliares utilizadas neste
+projeto.
+
+1. VERSÃO DO OPENGL: OpenGL 3.3 (Core Profile)
+------------------------------------------------------------------------------
+A escolha pelo OpenGL 3.3 no perfil "Core" foi estratégica por três motivos:
+
+a) Modernidade e Boas Práticas: Esta versão utiliza o pipeline gráfico
+totalmente programável via shaders (GLSL), abandonando funções obsoletas
+e ineficientes do pipeline antigo (fixed-function, ex: glBegin/glEnd).
+O perfil "Core" força o uso de Vertex Array Objects (VAOs) e
+Vertex Buffer Objects (VBOs), garantindo uma gestão de dados moderna
+e de alta performance na GPU.
+
+b) Ampla Compatibilidade: O OpenGL 3.3 é um padrão de ouro, suportado
+por praticamente todo hardware fabricado na última década, incluindo
+placas de vídeo integradas. Isso garante que o projeto possa ser
+compilado e executado em uma vasta gama de computadores sem problemas.
+
+c) Foco no Essencial: Versões mais recentes (4.x) introduzem conceitos
+avançados (Tessellation, Compute Shaders) que não são necessários
+para este projeto 2D, adicionando complexidade desnecessária. A versão
+3.3 oferece todas as ferramentas modernas essenciais de forma estável.
+
+BIBLIOTECA AUXILIAR: GLAD (OpenGL Loading Library)
+------------------------------------------------------------------------------
+A utilização do GLAD é uma necessidade técnica no desenvolvimento com OpenGL
+moderno.
+
+a) O Problema a ser Resolvido: O sistema operacional, por padrão, só
+expõe ao programa as funções do OpenGL 1.1. Todas as funções modernas
+(como glCreateShader, glGenVertexArrays, glUniformMatrix4fv, etc.)
+precisam ser "carregadas" manualmente em tempo de execução, obtendo seus
+endereços de memória diretamente do driver da placa de vídeo.
+
+b) A Solução: GLAD é um "carregador de funções" (loader) que automatiza
+esse processo. Ao ser inicializado com a função `gladLoadGLLoader` (que
+usa `glfwGetProcAddress` como ponte), ele busca e armazena os ponteiros
+para todas as funções da especificação OpenGL 3.3, tornando-as
+disponíveis para serem chamadas no código. Sem o GLAD (ou um loader
+alternativo como o GLEW), o programa sofreria uma falha de segmentação
+ao tentar invocar qualquer função moderna.
+
+==============================================================================
+ */
 
 #define CGLM_FORCE_DEPTH_ZERO_TO_ONE
 #define STB_IMAGE_IMPLEMENTATION
